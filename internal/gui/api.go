@@ -48,6 +48,7 @@ import (
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/notices"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/profile"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/redact"
@@ -402,9 +403,10 @@ func currentFX() fxJSON {
 // settingsJSON is the Settings page: the two choices plus the facts it shows.
 type settingsJSON struct {
 	settings.Settings
-	Version string `json:"version"`
-	Dir     string `json:"dir"`     // where magpie keeps its files, as shown
-	Gateway string `json:"gateway"` // the local endpoint
+	PrivacyEngines []privacyengine.Info `json:"privacyEngines"`
+	Version        string               `json:"version"`
+	Dir            string               `json:"dir"`     // where magpie keeps its files, as shown
+	Gateway        string               `json:"gateway"` // the local endpoint
 	// Builtins are the built-in plugins: each one's switch, whether it
 	// runs and what of it is in use (builtins.go)
 	Builtins []builtinJSON `json:"builtins"`
@@ -837,6 +839,7 @@ func codexWindowUnder(st settings.Settings, model string) *codexRunWindow {
 
 func settingsState() settingsJSON {
 	s := settingsJSON{Settings: settings.Load(), Version: Version, Dir: tilde(settings.Dir()), Portable: settings.Portable() != "", Gateway: gateway.URL()}
+	s.PrivacyEngines = privacyengine.Catalog()
 	s.AddrEnv = os.Getenv("MAGPIE_ADDR")
 	s.Log = tilde(applog.Current())
 	s.Builtins = builtinsState()

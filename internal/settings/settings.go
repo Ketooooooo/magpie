@@ -2165,8 +2165,10 @@ func SetPrivacyEngine(id string, validate func(Settings) error) error {
 	if err != nil {
 		return err
 	}
-	if err := validate(s); err != nil {
-		return err
+	if validate != nil {
+		if err := validate(s); err != nil {
+			return err
+		}
 	}
 	s.PrivacyEngine = id
 	return save(s, false)

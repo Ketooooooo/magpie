@@ -1,26 +1,77 @@
-// Package privacyengine selects a privacy engine and binds it to a gateway request.
+// Package privacyengine selects a registered privacy engine for a gateway request.
 package privacyengine
 
 import (
 	"context"
 	"errors"
+	"slices"
+	"strings"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
+	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
 const Builtin = "magpie"
 
-type adapter struct {
-	check    func(context.Context) error
-	validate func(settings.Settings) error
-	begin    func(context.Context) gwmw.Masker
+// Info is safe to return to the settings page. Connection credentials stay local.
+type Info struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Builtin    bool   `json:"builtin,omitempty"`
+	Configured bool   `json:"configured"`
+	Endpoint   string `json:"endpoint,omitempty"`
+	Off        bool   `json:"off,omitempty"`
+	Conflict   bool   `json:"conflict,omitempty"`
 }
 
-var engines = map[string]adapter{
-	Builtin: {},
-	"gray":  {check: checkGray, validate: compatible, begin: newGray},
+type engine struct {
+	info     Info
+	wanted   func(settings.Settings) bool
+	check    func(context.Context) error
+	validate func(settings.Settings) error
+	begin    func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
+	preview  func(context.Context, string) (string, []gwmw.Hit, bool, error)
+	remote   *companion
+}
+
+type registry map[string]engine
+
+func (r registry) register(e engine) {
+	if old, exists := r[e.info.ID]; exists {
+		old.info.Conflict = true
+		r[e.info.ID] = old
+		return
+	}
+	r[e.info.ID] = e
+}
+
+func registered() registry {
+	r := registry{}
+	r.register(nativeEngine())
+	for _, entry := range plugin.Load().Plugins {
+		if spec, _ := plugin.Privacy(plugin.Target(entry.Spec)); spec != nil {
+			r.register(companionEngine(entry, *spec))
+		}
+	}
+	return r
+}
+
+func Catalog() []Info {
+	var out []Info
+	for _, engine := range registered() {
+		out = append(out, engine.info)
+	}
+	slices.SortFunc(out, func(a, b Info) int {
+		if a.Builtin != b.Builtin {
+			if a.Builtin {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+	return out
 }
 
 func ID(st settings.Settings) string {
@@ -30,67 +81,76 @@ func ID(st settings.Settings) string {
 	return st.PrivacyEngine
 }
 
-func Select(ctx context.Context, id string) error {
-	engine, ok := engines[id]
-	if !ok {
-		return errors.New("Unknown privacy engine")
+// The default engine is registered through the same registry. It can be
+// resolved without reading installed packages on Magpie's normal hot path.
+func lookup(id string) (engine, error) {
+	r := registry{}
+	if id == Builtin {
+		r.register(nativeEngine())
+	} else {
+		r = registered()
 	}
-	if engine.check != nil {
-		if err := engine.check(ctx); err != nil {
+	e, ok := r[id]
+	if !ok || e.info.Off {
+		return engine{}, errors.New("The selected privacy plugin is unavailable. Install or enable it in Plugins, or select another engine")
+	}
+	if e.info.Conflict {
+		return engine{}, errors.New("More than one installed privacy plugin uses this engine ID")
+	}
+	return e, nil
+}
+
+func Select(ctx context.Context, id string) error {
+	e, err := lookup(id)
+	if err != nil {
+		return err
+	}
+	if e.check != nil {
+		if err := e.check(ctx); err != nil {
 			return err
 		}
 	}
-	return settings.SetPrivacyEngine(id, func(st settings.Settings) error {
-		if engine.validate != nil {
-			return engine.validate(st)
-		}
-		return nil
-	})
+	return settings.SetPrivacyEngine(id, e.validate)
 }
 
 func Wanted(st settings.Settings) bool {
-	return ID(st) != Builtin || masking.Wanted(st)
+	// A selected external engine remains required if its plugin is removed.
+	return ID(st) != Builtin || nativeEngine().wanted(st)
 }
 
 func Begin(ctx context.Context, st settings.Settings, forced bool) (context.Context, gwmw.Masker, error) {
-	if ID(st) == Builtin {
-		m, err := gwmw.Masking(forced || masking.Wanted(st))
-		if forced && !masking.Wanted(st) && err == nil {
-			if _, ok := m.(gwmw.ContextTeller); !ok {
-				return ctx, nil, gwmw.ErrUnmasked
-			}
-			ctx = masking.WithForced(ctx)
-		}
-		return ctx, m, err
+	e, err := lookup(ID(st))
+	if err != nil {
+		return ctx, nil, err
 	}
-	engine, ok := engines[ID(st)]
-	if !ok || engine.begin == nil {
-		return ctx, nil, gwmw.ErrUnmasked
-	}
-	if engine.validate != nil {
-		if err := engine.validate(st); err != nil {
+	if e.validate != nil {
+		if err := e.validate(st); err != nil {
 			return ctx, nil, err
 		}
 	}
-	return ctx, engine.begin(ctx), nil
+	return e.begin(ctx, st, forced)
 }
 
 func Preview(ctx context.Context, st settings.Settings, input string) (string, []gwmw.Hit, bool, error) {
-	if ID(st) == Builtin {
-		text, hits, off := masking.Preview(input)
-		return text, hits, off, nil
-	}
-	ctx, m, err := Begin(ctx, st, false)
+	e, err := lookup(ID(st))
 	if err != nil {
 		return "", nil, false, err
 	}
-	type result struct {
-		text string
-		hits []gwmw.Hit
+	if e.validate != nil {
+		if err := e.validate(st); err != nil {
+			return "", nil, false, err
+		}
 	}
-	out, err := gwmw.Safely(func() result {
-		text, hits := m.(gwmw.ContextTeller).TextHitsContext(ctx, input)
-		return result{text, hits}
-	})
-	return out.text, out.hits, false, err
+	return e.preview(ctx, input)
+}
+
+func Configure(ctx context.Context, id, endpoint, token string) error {
+	e, err := lookup(id)
+	if err != nil {
+		return err
+	}
+	if e.remote == nil {
+		return errors.New("This engine does not use a companion service")
+	}
+	return e.remote.configure(ctx, endpoint, token)
 }

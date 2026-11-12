@@ -247,23 +247,94 @@ function redactWordsHidden(r) {
   set();
   r.querySelector(".val").append(eye);
 }
+let editingPrivacyEngine = "";
+function openPrivacyEngineSettings(event, id) {
+  editingPrivacyEngine = id;
+  return openSettingsAt(event, "privacy", `[data-privacy-engine="${CSS.escape(id)}"]`);
+}
+
 function privacyEngineRow(s) {
   const current = s.privacyEngine || "magpie";
-  const choices = [["magpie", "Magpie"], ["gray", "Gray Privacy"]];
+  const engines = s.privacyEngines || [];
+  const selected = engines.find((engine) => engine.id === current);
+  const ready = engines.filter((engine) => engine.configured && !engine.off && !engine.conflict);
+  const choices = ready.map(({id, name}) => [id, name]);
   const controls = segs(choices, current, (id) => {
     if (id === current) return;
-    prefWrite(api("privacy-engine", { id }));
+    writingPrefs(api("privacy-engine", { id }))
+      .then((ns) => { prefs = ns; renderSettings(); })
+      .catch((err) => { renderSettings(); settingsErr(err); });
   });
   const row = el("div", "row pref");
   const who = el("div", "who"), val = el("div", "val");
-  const sub = current === "gray"
-    ? t("Gray uses its published rules. Magpie settings are kept for when you switch back.")
-    : t("Choose the engine that protects new gateway requests.");
+  let sub = t("Choose the engine that protects new gateway requests.");
+  if (!selected || selected.off || selected.conflict || !selected.configured) {
+    sub = t("The selected engine is unavailable. Configure it or choose another engine.");
+  }
   who.append(el("div", "name", t("Privacy engine")), el("div", "sub", sub));
   val.append(controls);
   row.append(who, val);
   row.id = "privacyEngineRow";
-  $("#redactList").prepend(row);
+  const box = $("#redactList");
+  box.prepend(row);
+  let last = row;
+  for (const engine of engines.filter((engine) => !engine.builtin)) {
+    const entry = privacyConnectionRow(engine);
+    last.after(entry);
+    last = entry;
+  }
+}
+
+function privacyConnectionRow(engine) {
+  const row = el("div", "row pref privacy-engine-connection");
+  row.dataset.privacyEngine = engine.id;
+  const who = el("div", "who"), controls = el("div", "val");
+  let detail = engine.configured ? engine.endpoint : t("Connection required");
+  if (engine.off || engine.conflict) detail = t("Unavailable");
+  who.append(el("div", "name", engine.name), el("div", "sub", detail));
+  row.append(who, controls);
+  if (engine.off || engine.conflict) return row;
+  if (engine.configured && editingPrivacyEngine !== engine.id) {
+    const edit = el("button", "", t("Configure"));
+    edit.type = "button";
+    edit.onclick = () => { editingPrivacyEngine = engine.id; renderSettings(); };
+    controls.append(edit);
+    return row;
+  }
+  const form = el("form", "privacy-engine-form");
+  const endpoint = el("input", "input"), token = el("input", "input");
+  endpoint.type = "url";
+  endpoint.placeholder = "http://127.0.0.1:8782";
+  endpoint.value = engine.endpoint || "";
+  endpoint.required = true;
+  endpoint.setAttribute("aria-label", t("Local service address"));
+  token.type = "password";
+  token.autocomplete = "off";
+  token.placeholder = engine.configured ? t("Leave blank to keep the current token") : t("Service token");
+  token.required = !engine.configured;
+  token.setAttribute("aria-label", t("Service token"));
+  const save = el("button", "", t("Save connection"));
+  save.type = "submit";
+  const error = el("div", "warn");
+  error.setAttribute("role", "status");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    save.disabled = true;
+    error.textContent = "";
+    try {
+      prefs = await writingPrefs(api("privacy-engine/configure", {id: engine.id, endpoint: endpoint.value, token: token.value}));
+      token.value = "";
+      editingPrivacyEngine = "";
+      renderSettings();
+    } catch (err) {
+      error.textContent = err.message;
+      save.disabled = false;
+    }
+  };
+  form.append(endpoint, token, save, error);
+  controls.append(form);
+  who.append(el("div", "sub", t("Connect only to a service you trust with unmasked requests.")));
+  return row;
 }
 
 let displayedPrivacyEngine;
@@ -281,7 +352,7 @@ let displayedPrivacyEngine;
     const f = wordFocusOf();
     wordsRedrawing = true;
     try { draw(s, keep); } finally { wordsRedrawing = false; }
-    if (engine === "gray") {
+    if (engine !== "magpie") {
       for (const id of ["redactList", "findList", "maskActList"]) $("#" + id)?.replaceChildren();
       privacyEngineRow(s);
       unmaskedRow(s);

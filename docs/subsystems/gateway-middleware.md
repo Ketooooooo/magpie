@@ -72,29 +72,44 @@ bun test packages/think-tags packages/model-map packages/param-override packages
 
 ## Privacy engines in the gateway
 
-Settings → Privacy selects the engine for new gateway requests. The Magpie
-engine uses the existing built-in settings. The Gray Privacy preview uses
-the deployed rules of a local Gray host. Set `MAGPIE_GRAY_PRIVACY_URL` to a
-numeric loopback HTTP address, and set `MAGPIE_GRAY_PRIVACY_TOKEN` in the
-gateway process to the host credential. The UI checks connectivity before
-switching. Magpie keeps the built-in engine's settings when switching away.
-A Magpie custom rule, masked word, exception, category action or alternate
-unmasked route needs review before Gray can be selected.
+Settings → Privacy selects a registered engine for new gateway requests.
+The Magpie engine uses the existing built-in masking settings. Enabled
+installed plugins can declare a companion engine under `magpie.privacy`
+in package.json. Install [the Gray Privacy package](../../examples/plugins/gray-privacy)
+through Plugins, open Configure and enter the local Gray host address and
+token. The address must be numeric loopback HTTP. The token stays in a
+local private file, separate from the plugin's options. Saving tests the
+connection, and selecting the engine applies it to subsequent requests.
+Magpie keeps its own settings when switching away. Custom masking rules,
+exceptions, category actions and alternate unmasked routes need review
+before switching to a companion.
 
-The gateway passes eligible protocol text fields through the engine. The
-Gray adapter pins the active Gray revision and uses its scan endpoint.
-A failure stops the request. The request's mappings live with the reply
-writer and are discarded at the end of the request. Insights → Masking
-shows which engine made each record, including after an engine switch.
-Gray records expose masking diagnostics without a lookup of original values.
-Recent Calls, prompt inspection, and body archives omit companion-engine
-conversation bodies while those recorders use Magpie's own scrubbing rules.
+The declaration names the engine ID, display name, protocol version,
+two service paths and a custom token header. For `http-scan-v1`, the
+state path returns an `active_version` integer. The scan path accepts
+`text`, `scope`, `version: "active"` and `expected_version`. Its response
+reports completeness, the protected text and ordered byte-range changes.
+Each change includes the original value, placeholder, category and whether
+the change is reversible. Magpie validates and applies the response to
+eligible protocol fields, using the selected engine's rule revision for
+the request. It keeps the mappings with the reply writer. This extension
+uses the installed plugin lifecycle and does not run JavaScript to scan
+requests. An optional plugin page continues to use the existing page
+declaration.
 
-The preview covers deployed Gray rules. Model detection, disclosure approval,
-and a shared rule editor require their own integration with Gray. A normal
-gateway key override and a provider explicitly configured to receive
-unmasked requests continue to apply.
+Disabling or removing the selected plugin, a conflicting engine ID, an
+invalid response or a service outage stops requests requiring that engine.
+The user can select another installed engine explicitly. Insights → Masking
+records the engine ID and name, so records remain readable after a switch,
+disable or uninstall. Companion records show masking diagnostics without a
+lookup of original values. Recent Calls, prompt inspection and body archives
+omit companion-engine conversation bodies while those recorders use
+Magpie's own scrubbing rules.
 
-See [engine selection](../../internal/privacyengine/engine.go), the
-[Gray adapter](../../internal/privacyengine/gray.go), and the
-[request regression](../../internal/gateway/privacy_engine_test.go).
+The Gray example uses deployed Gray rules. S0R, disclosure approval and a
+shared rule editor need additional integration. Gateway key overrides and
+providers explicitly configured to receive unmasked requests still apply.
+
+See [registration](../../internal/privacyengine/engine.go),
+[manifest validation](../../internal/plugin/privacy.go), and the
+[gateway regression](../../internal/gateway/privacy_engine_test.go).

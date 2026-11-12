@@ -96,10 +96,11 @@ func pluginSubs() []pluginSubJSON {
 // pluginEntryJSON is a plugin as Settings → Plugins lists it.
 type pluginEntryJSON struct {
 	plugin.Entry
-	Error     string   `json:"error,omitempty"`   // why it didn't load
-	Providers []string `json:"providers"`         // the names of those it signs in to
-	Version   string   `json:"version,omitempty"` // installed
-	Latest    string   `json:"latest,omitempty"`  // on npm, when the market asked
+	PrivacyEngine string   `json:"privacyEngine,omitempty"`
+	Error         string   `json:"error,omitempty"`   // why it didn't load
+	Providers     []string `json:"providers"`         // the names of those it signs in to
+	Version       string   `json:"version,omitempty"` // installed
+	Latest        string   `json:"latest,omitempty"`  // on npm, when the market asked
 	// Icon is the picture its own package.json gives (magpie.icon), as
 	// the page can show it: the plugin's, which its row shows before any
 	// of its providers' own (#1775)
@@ -345,6 +346,10 @@ func pluginsState(ctx context.Context, w Windows) pluginsJSON {
 		// one whose providers are known, as those are named in the
 		// background and the button would come and go with them
 		j.OptionsExample = plugin.OptionsExample(plugin.Target(e.Spec))
+		if engine, _ := plugin.Privacy(plugin.Target(e.Spec)); engine != nil {
+			j.PrivacyEngine = engine.ID
+			j.InMagpieOnly = plugin.InMagpieOnly(plugin.Target(e.Spec))
+		}
 		if file, _ := plugin.Agent(plugin.Target(e.Spec)); file != "" {
 			j.IsAgent = true
 			j.InMagpieOnly = plugin.InMagpieOnly(plugin.Target(e.Spec))

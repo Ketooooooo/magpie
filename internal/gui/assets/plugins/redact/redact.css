@@ -384,3 +384,12 @@ body.window .msk-onebar::before { inset: -6px calc(var(--bar, 0px) - 16px) -6px 
 .word-import-bar { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0; }
 .word-import-bar .grow { flex: 1; }
 .word-import-count { min-width: 0; }
+
+.privacy-engine-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.privacy-engine-form input { min-width: 0; width: min(100%, 13rem); }
+.privacy-engine-form [role="status"]:empty { display: none; }

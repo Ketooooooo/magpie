@@ -110,6 +110,9 @@ func redactedHits(ctx context.Context, w http.ResponseWriter, body []byte) (http
 	st, _ := requestPrivacySettings(ctx)
 	o.h.engine = privacyengine.ID(st)
 	o.h.masker = m
+	if named, ok := m.(interface{ PrivacyName() string }); ok {
+		o.h.engineName = named.PrivacyName()
+	}
 	if err == nil {
 		err = blocked(o.h)
 	}
@@ -204,6 +207,9 @@ func maskTextHits(ctx context.Context, s string) (gwmw.Masker, string, maskHits,
 	st, _ := requestPrivacySettings(ctx)
 	o.h.engine = privacyengine.ID(st)
 	o.h.masker = m
+	if named, ok := m.(interface{ PrivacyName() string }); ok {
+		o.h.engineName = named.PrivacyName()
+	}
 	if err == nil {
 		err = blocked(o.h)
 	}

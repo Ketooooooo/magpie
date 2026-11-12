@@ -68,7 +68,7 @@ function maskLoad(force) {
 const maskSettings = () => prefs || state?.settings || {};
 // on as the masker is (masking.Wanted): your own words mask with neither
 // switch on
-const maskOn = () => { const s = maskSettings(); return !!(s.privacyEngine === "gray" || s.redact || s.redactPersonal || s.redactWords?.length); };
+const maskOn = () => { const s = maskSettings(); return !!((s.privacyEngine && s.privacyEngine !== "magpie") || s.redact || s.redactPersonal || s.redactWords?.length); };
 
 function maskPageOpen() {
   if (!providers && !maskProvAsked) {
@@ -580,6 +580,10 @@ function maskKindsOf(r) {
   for (const x of r.values || []) by[x.k] = (by[x.k] || 0) + (x.n || 1);
   return Object.entries(by).sort((x, y) => y[1] - x[1]);
 }
+function maskEngineName(record) {
+  return record.engineName || (record.engine === "gray" ? "Gray Privacy" : record.engine === "magpie" || !record.engine ? "Magpie" : record.engine);
+}
+
 function maskRecordRow(r) {
   const row = el("button", "msk-row" + (r.blocked ? " held" : ""));
   row.type = "button";
@@ -590,7 +594,7 @@ function maskRecordRow(r) {
   const kinds = el("span", "msk-kinds");
   if (r.blocked) kinds.append(el("span", "msk-held", t("Held back")));
   else if (r.what && r.what !== "chat") kinds.append(el("span", "msk-what", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
-  kinds.append(el("span", "msk-what", r.engine === "gray" ? "Gray Privacy" : "Magpie"));
+  kinds.append(el("span", "msk-what", maskEngineName(r)));
   const ranked = maskKindsOf(r);
   for (const [k, n] of ranked.slice(0, 3)) {
     const c = el("span", "msk-kind");
@@ -728,7 +732,7 @@ function drawMaskOne() {
   const card = el("section", "msk-req");
   const who = el("div", "msk-who");
   maskRoute(who, r);
-  who.append(el("span", "msk-chip", r.engine === "gray" ? "Gray Privacy" : "Magpie"));
+  who.append(el("span", "msk-chip", maskEngineName(r)));
   if (r.model) who.append(el("span", "msk-chip", r.model));
   if (r.what && r.what !== "chat") who.append(el("span", "msk-chip", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
   card.append(who, maskSteps(r, o));

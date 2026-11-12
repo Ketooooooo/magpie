@@ -69,17 +69,18 @@ type Value struct {
 
 // Record is one request's masking.
 type Record struct {
-	Engine   string    `json:"engine,omitempty"`
-	Key      int64     `json:"key"` // unique, later records larger
-	Time     time.Time `json:"t"`
-	Route    int64     `json:"route,omitempty"` // its route in the trace, where it has one
-	What     string    `json:"what"`            // chat, search, image, video, embeddings, audio, count
-	Agent    string    `json:"agent,omitempty"`
-	Session  string    `json:"session,omitempty"`
-	Provider string    `json:"provider,omitempty"`
-	Model    string    `json:"model,omitempty"`
-	N        int       `json:"n"` // values swapped, each place counted
-	Values   []Value   `json:"values,omitempty"`
+	Engine     string    `json:"engine,omitempty"`
+	EngineName string    `json:"engineName,omitempty"`
+	Key        int64     `json:"key"` // unique, later records larger
+	Time       time.Time `json:"t"`
+	Route      int64     `json:"route,omitempty"` // its route in the trace, where it has one
+	What       string    `json:"what"`            // chat, search, image, video, embeddings, audio, count
+	Agent      string    `json:"agent,omitempty"`
+	Session    string    `json:"session,omitempty"`
+	Provider   string    `json:"provider,omitempty"`
+	Model      string    `json:"model,omitempty"`
+	N          int       `json:"n"` // values swapped, each place counted
+	Values     []Value   `json:"values,omitempty"`
 	// Blocked: the request was held back, sent to no one, for a value
 	// of a kind the user set to block
 	Blocked bool `json:"blocked,omitempty"`
