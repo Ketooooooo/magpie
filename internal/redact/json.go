@@ -566,21 +566,47 @@ func typeOf(data []byte) string {
 }
 
 // RestoreJSON puts the values back in a response body.
-func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil) }
+func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil, nil) }
 
-// restoreJSON is RestoreJSON, counting in put as restore does.
-func restoreJSON(body []byte, put map[string]int) []byte {
-	if !heldIn(body) && !hasShapes(body) {
-		return body
+type restoreText func(string, bool, map[string]int) string
+
+// restoreJSON walks and escapes the reply the same way for both maskers.
+// A request-local masker leaves sealed and reasoning fields as received.
+func restoreJSON(body []byte, put map[string]int, replace restoreText) []byte {
+	local := replace != nil
+	if !local {
+		if !heldIn(body) && !hasShapes(body) {
+			return body
+		}
+		replace = restore
 	}
 	typ := typeOf(body)
+	signed := signedReplyFields(body, local)
 	out, ok := walk(body, func(path, key, s string) string {
-		return restore(s, asJSON(key, typ), put)
+		if local && (sealedText(key, s) || privateReplyField(path, key, typ, signed)) {
+			return s
+		}
+		return replace(s, asJSON(key, typ), put)
 	})
 	if !ok {
-		return []byte(restore(string(body), false, put))
+		if local {
+			return body
+		}
+		return []byte(replace(string(body), false, put))
 	}
 	return out
+}
+
+func signedReplyFields(body []byte, local bool) []string {
+	if !local {
+		return nil
+	}
+	signed, _, _ := scan(body)
+	return signed
+}
+
+func privateReplyField(path, key, typ string, signed []string) bool {
+	return under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning")
 }
 
 // heldIn says b may have a placeholder of a value held, in any of the

@@ -247,14 +247,6 @@ function redactWordsHidden(r) {
   set();
   r.querySelector(".val").append(eye);
 }
-let editingPrivacyEngine = "";
-let activatePrivacyEngine = false;
-function openPrivacyEngineSettings(event, id) {
-  editingPrivacyEngine = id;
-  activatePrivacyEngine = false;
-  return openSettingsAt(event, "privacy", `[data-privacy-engine="${CSS.escape(id)}"]`);
-}
-
 function privacyEngineRow(s) {
   const current = s.privacyEngine || "magpie";
   const engines = s.privacyEngines || [];
@@ -262,15 +254,15 @@ function privacyEngineRow(s) {
   const label = (engine) => engine.builtin ? t("Magpie (built-in)") : engine.name;
   const options = [{v: "none", name: "None", note: "Turn off default gateway masking."}];
   for (const engine of engines.filter((engine) => !engine.off && !engine.conflict)) {
-    options.push({v: engine.id, name: label(engine), literalName: true, note: engine.configured ? "" : "Connection required"});
+    options.push({v: engine.id, name: label(engine), literalName: true, note: ""});
   }
   const row = el("div", "row pref");
   const who = el("div", "who"), val = el("div", "val");
   let sub = t("Choose the engine that protects new gateway requests.");
   if (current === "none") {
     sub = t("Gateway masking is off by default. Keys that require masking still use Magpie.");
-  } else if (!selected || selected.off || selected.conflict || !selected.configured) {
-    sub = t("The selected engine is unavailable. Configure it or choose another engine.");
+  } else if (!selected || selected.off || selected.conflict) {
+    sub = t("The selected engine is unavailable. Enable it in Plugins or choose another engine.");
   }
   who.append(el("div", "name", t("Privacy engine")), el("div", "sub", sub));
   const menu = el("button", "rt-cond on", current === "none" ? t("None") : selected ? label(selected) : current);
@@ -282,83 +274,16 @@ function privacyEngineRow(s) {
   menu.onclick = () => {
     if (menu.getAttribute("aria-expanded") === "true") { closeProtoMenu(); return; }
     openProtoMenu(menu, options, current, (id) => {
-      const next = engines.find((engine) => engine.id === id);
-      if (next && !next.configured) {
-        editingPrivacyEngine = id;
-        activatePrivacyEngine = true;
-        renderSettings();
-        $("#privacyEngineList input[type=url]")?.focus(NO_SCROLL);
-        return;
-      }
       if (id === current) return;
       menu.disabled = true;
-      editingPrivacyEngine = "";
-      activatePrivacyEngine = false;
       prefWrite(api("privacy-engine", { id }));
     }, "Privacy engine", "", "right");
   };
   val.append(menu);
-  if (selected && !selected.builtin && !selected.off && !selected.conflict && editingPrivacyEngine !== current) {
-    const edit = el("button", "text", t("Configure"));
-    edit.type = "button";
-    edit.onclick = () => { editingPrivacyEngine = current; activatePrivacyEngine = false; renderSettings(); };
-    val.append(edit);
-  }
   row.append(who, val);
   row.id = "privacyEngineRow";
   const box = $("#privacyEngineList");
   box.replaceChildren(row);
-  const editing = engines.find((engine) => engine.id === editingPrivacyEngine);
-  if (editing && !editing.off && !editing.conflict) box.append(privacyConnectionRow(editing));
-}
-
-function privacyConnectionRow(engine) {
-  const row = el("div", "row pref privacy-engine-connection");
-  row.dataset.privacyEngine = engine.id;
-  const who = el("div", "who"), controls = el("div", "val");
-  who.append(el("div", "name", engine.name));
-  row.append(who, controls);
-  const form = el("form", "privacy-engine-form");
-  const endpoint = el("input", "input"), token = el("input", "input");
-  endpoint.type = "url";
-  endpoint.placeholder = "http://127.0.0.1:8782";
-  endpoint.value = engine.endpoint || "";
-  endpoint.required = true;
-  endpoint.setAttribute("aria-label", t("Local service address"));
-  token.type = "password";
-  token.autocomplete = "off";
-  token.placeholder = engine.configured ? t("Leave blank to keep the current token") : t("Service token");
-  token.required = !engine.configured;
-  token.setAttribute("aria-label", t("Service token"));
-  const save = el("button", "", t(activatePrivacyEngine ? "Save and select" : "Save connection"));
-  save.type = "submit";
-  const error = el("div", "warn");
-  error.setAttribute("role", "status");
-  form.onsubmit = async (event) => {
-    event.preventDefault();
-    save.disabled = true;
-    error.textContent = "";
-    try {
-      prefs = await writingPrefs(api("privacy-engine/configure", {id: engine.id, endpoint: endpoint.value, token: token.value}));
-      token.value = "";
-      token.required = false;
-      token.placeholder = t("Leave blank to keep the current token");
-      if (activatePrivacyEngine) prefs = await writingPrefs(api("privacy-engine", {id: engine.id}));
-      editingPrivacyEngine = "";
-      activatePrivacyEngine = false;
-      renderSettings();
-    } catch (err) {
-      error.textContent = err.message;
-      save.disabled = false;
-    }
-  };
-  const cancel = el("button", "text", t("Cancel"));
-  cancel.type = "button";
-  cancel.onclick = () => { editingPrivacyEngine = ""; activatePrivacyEngine = false; renderSettings(); };
-  form.append(endpoint, token, save, cancel, error);
-  controls.append(form);
-  who.append(el("div", "sub", t("Connect only to a service you trust with unmasked requests.")));
-  return row;
 }
 
 let displayedPrivacyEngine;

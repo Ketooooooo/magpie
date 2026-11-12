@@ -592,7 +592,9 @@ function maskKindsOf(r) {
   return Object.entries(by).sort((x, y) => y[1] - x[1]);
 }
 function maskEngineName(record) {
-  return record.engineName || (record.engine === "gray" ? "Gray Privacy" : record.engine === "magpie" || !record.engine ? "Magpie" : record.engine);
+  if (record.engineName) return record.engineName;
+  const id = record.engine || "magpie";
+  return maskSettings().privacyEngines?.find((engine) => engine.id === id)?.name || (id === "magpie" ? "Magpie" : id);
 }
 
 function maskRecordRow(r) {

@@ -98,23 +98,6 @@ func maskingRoutes(mux *http.ServeMux) {
 		writeJSON(rw, settingsState())
 	})
 
-	mux.HandleFunc("POST /api/privacy-engine/configure", func(rw http.ResponseWriter, r *http.Request) {
-		var in struct {
-			ID       string `json:"id"`
-			Endpoint string `json:"endpoint"`
-			Token    string `json:"token"`
-		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 8<<10)).Decode(&in); err != nil {
-			fail(rw, err)
-			return
-		}
-		if err := privacyengine.Configure(r.Context(), in.ID, in.Endpoint, in.Token); err != nil {
-			fail(rw, err)
-			return
-		}
-		writeJSON(rw, settingsState())
-	})
-
 	mux.HandleFunc("POST /api/masking/allow", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			P string `json:"p"`

@@ -358,6 +358,8 @@ let listWait = 20 * 1000
 // magpie then starts a new host for the calls to come and stops this one
 // once its own are answered (host.go's heavyMB and recycle). It checks
 // every heavy.everyMillis, from heavy.afterMillis after the host started.
+let privacyMemoryMiB = 0
+
 function watchHeavy(heavy) {
   const mb = Number(heavy?.mb)
   if (!(mb > 0)) return
@@ -365,10 +367,11 @@ function watchHeavy(heavy) {
   const after = Math.max(Number(heavy.afterMillis) || 0, 0)
   const rss = () => process.memoryUsage().rss / 1048576
   const timer = setInterval(() => {
-    if (process.uptime() * 1000 < after || rss() <= mb) return
+    const limit = mb + privacyMemoryMiB
+    if (process.uptime() * 1000 < after || rss() <= limit) return
     Bun.gc(true)
     const held = rss()
-    if (held <= mb) return
+    if (held <= limit) return
     clearInterval(timer)
     send({ event: "heavy", count: Math.round(held) })
   }, every)
@@ -3521,6 +3524,15 @@ async function fetchAs(id, record, key, params) {
 // ---- the loop ----------------------------------------------------------------
 
 const handlers = {
+  async privacyProtect(p, signal) {
+    const entry = await import(pathToFileURL(p.entry).href)
+    if (typeof entry.protect !== "function") throw new Error("Privacy plugin exports no protect function")
+    signal.throwIfAborted()
+    const result = await entry.protect(p.fragments, { directory: p.directory, version: p.version, preview: p.preview, signal })
+    // The selected engine can keep a native model resident in the shared host.
+    privacyMemoryMiB = Math.max(privacyMemoryMiB, p.memoryMiB || 0)
+    return result
+  },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {
       calls: state.calls, failures: state.failures,

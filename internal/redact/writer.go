@@ -22,7 +22,7 @@ type Writer struct {
 	buf     bytes.Buffer
 	pending *held
 	done    bool
-	replace func(string, bool, map[string]int) string
+	replace restoreText
 	put     map[string]int // placeholders put back, each place counted
 }
 
@@ -45,7 +45,7 @@ type held struct {
 func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w} }
 
 // NewRestoringWriter frames replies for a request-bound engine.
-func NewRestoringWriter(w http.ResponseWriter, replace func(string, bool, map[string]int) string) *Writer {
+func NewRestoringWriter(w http.ResponseWriter, replace restoreText) *Writer {
 	return &Writer{w: w, replace: replace}
 }
 
@@ -54,24 +54,6 @@ func (rw *Writer) restore(text string, escaped bool, put map[string]int) string 
 		return rw.replace(text, escaped, put)
 	}
 	return restore(text, escaped, put)
-}
-
-func (rw *Writer) restoreBody(body []byte) []byte {
-	if rw.replace == nil {
-		return restoreJSON(body, rw.count())
-	}
-	typ := typeOf(body)
-	signed, _, _ := scan(body)
-	out, ok := walk(body, func(path, key, text string) string {
-		if under(path, signed) || sealedText(key, text) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning") {
-			return text
-		}
-		return rw.restore(text, asJSON(key, typ), rw.count())
-	})
-	if !ok {
-		return body
-	}
-	return out
 }
 
 func (rw *Writer) Header() http.Header { return rw.w.Header() }
@@ -218,7 +200,7 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		rw.w.Write(rw.restoreBody(rw.buf.Bytes()))
+		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace))
 	case stream:
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
@@ -259,7 +241,7 @@ func (rw *Writer) event(ev []byte) error {
 		// piece held: released for it, the held piece went out with the
 		// start of its placeholder as it was, the next piece with the
 		// rest, and neither was a placeholder to put back (#5287)
-		_, err := rw.w.Write(rebuild(pre, rw.restoreBody(data), post))
+		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count(), rw.replace), post))
 		return err
 	}
 	ctx := name + "|" + eventCtx(data)
@@ -280,17 +262,14 @@ func (rw *Writer) event(ev []byte) error {
 	if typ == "" {
 		typ = name
 	}
-	var signed []string
-	if rw.replace != nil {
-		signed, _, _ = scan(data)
-	}
+	signed := signedReplyFields(data, rw.replace != nil)
 	var tails, cuts map[string]string
 	restored, _ := walk(data, func(path, key, s string) string {
 		if c, ok := carry[path]; ok {
 			s = c + s
 		}
 		if sealedText(key, s) || rw.replace != nil &&
-			(under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning")) {
+			privateReplyField(path, key, typ, signed) {
 			return s
 		}
 		// the tail is looked for before anything is put back, so a

@@ -10,7 +10,7 @@ import (
 
 func nativeEngine() engine {
 	return engine{
-		info:   Info{ID: Builtin, Name: "Magpie", Builtin: true, Configured: true},
+		info:   Info{ID: Builtin, Name: "Magpie", Builtin: true},
 		wanted: masking.Wanted,
 		begin: func(ctx context.Context, st settings.Settings, forced bool) (context.Context, gwmw.Masker, error) {
 			wanted := masking.Wanted(st)

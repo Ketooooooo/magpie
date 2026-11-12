@@ -17,15 +17,13 @@ const (
 	Disabled = "none"
 )
 
-// Info is safe to return to the settings page. Connection credentials stay local.
+// Info is an installed engine as shown in Settings.
 type Info struct {
-	ID         string `json:"id"`
-	Name       string `json:"name"`
-	Builtin    bool   `json:"builtin,omitempty"`
-	Configured bool   `json:"configured"`
-	Endpoint   string `json:"endpoint,omitempty"`
-	Off        bool   `json:"off,omitempty"`
-	Conflict   bool   `json:"conflict,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Builtin  bool   `json:"builtin,omitempty"`
+	Off      bool   `json:"off,omitempty"`
+	Conflict bool   `json:"conflict,omitempty"`
 }
 
 type engine struct {
@@ -35,7 +33,6 @@ type engine struct {
 	validate func(settings.Settings) error
 	begin    func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
 	preview  func(context.Context, string) (string, []gwmw.Hit, bool, error)
-	remote   *companion
 }
 
 type registry map[string]engine
@@ -54,7 +51,7 @@ func registered() registry {
 	r.register(nativeEngine())
 	for _, entry := range plugin.Load().Plugins {
 		if spec, _ := plugin.Privacy(plugin.Target(entry.Spec)); spec != nil {
-			r.register(companionEngine(entry, *spec))
+			r.register(hostedEngine(entry, *spec))
 		}
 	}
 	return r
@@ -172,15 +169,4 @@ func Preview(ctx context.Context, st settings.Settings, input string) (string, [
 		}
 	}
 	return e.preview(ctx, input)
-}
-
-func Configure(ctx context.Context, id, endpoint, token string) error {
-	e, err := lookup(id)
-	if err != nil {
-		return err
-	}
-	if e.remote == nil {
-		return errors.New("This engine does not use a companion service")
-	}
-	return e.remote.configure(ctx, endpoint, token)
 }

@@ -1,14 +1,13 @@
 package gateway
 
 import (
+	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/yetone/magpie/internal/maskrec"
@@ -16,43 +15,15 @@ import (
 	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
+	"github.com/yetone/magpie/internal/testenv"
 )
 
 func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
+	t.Setenv("MAGPIE_BUN", testenv.Bun(t))
+	t.Cleanup(plugin.Settle)
 	const value = "demo@gray-preview.internal"
 	const token = "{{EMAIL_xxxxxxxx}}"
-	const credential = "test-privacy-service-token-123456"
 	const engineID = "test-detector"
-	var offline atomic.Bool
-	service := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if offline.Load() || r.Header.Get("X-Test-Token") != credential {
-			http.Error(w, "unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		switch r.URL.Path {
-		case "/example/state":
-			fmt.Fprint(w, `{"active_version":3}`)
-		case "/example/scan":
-			var in struct {
-				Text    string `json:"text"`
-				Version int    `json:"expected_version"`
-			}
-			if json.NewDecoder(r.Body).Decode(&in) != nil || in.Version != 3 {
-				http.Error(w, "invalid", http.StatusBadRequest)
-				return
-			}
-			report := map[string]any{"complete": true, "protected_text": in.Text}
-			if i := strings.Index(in.Text, value); i >= 0 {
-				report["protected_text"] = strings.Replace(in.Text, value, token, 1)
-				report["changes"] = []map[string]any{{"start": i, "end": i + len(value), "value": value, "placeholder": token, "category": "EMAIL", "reversible": true}}
-			}
-			_ = json.NewEncoder(w).Encode(report)
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer service.Close()
-
 	f := &fake{ctype: "application/json", reply: `{"id":"chatcmpl-1","object":"chat.completion","model":"m1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`}
 	setup(t, provider.Chat, f)
 	ordinaryReply := f.reply
@@ -64,23 +35,32 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatalf("before installation, only Magpie should be listed: %+v", got)
 	}
 	dir := t.TempDir()
-	manifest := []byte(`{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"http-scan-v1","statePath":"/example/state","scanPath":"/example/scan","tokenHeader":"X-Test-Token"}}}`)
-	if err := os.WriteFile(filepath.Join(dir, "package.json"), manifest, 0o600); err != nil {
-		t.Fatal(err)
+	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"plugin-scan-v1","entry":"privacy.mjs"}}}`
+	code := `
+import { existsSync } from "node:fs";
+export function protect(fragments) {
+  if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
+  return { version: 1, reports: fragments.map(({text}) => {
+    const value = "` + value + `", token = "` + token + `";
+    const index = text.indexOf(value);
+    const start = Buffer.byteLength(text.slice(0, index));
+    const changes = index >= 0 ? [{start, end: start + value.length, value, placeholder: token, category: "EMAIL", reversible: true}] : [];
+    return {complete: true, protected_text: text.replace(value, token), changes};
+  }) };
+}
+`
+	for name, contents := range map[string]string{"package.json": manifest, "privacy.mjs": code} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := plugin.AddExact(t.Context(), dir); err != nil {
-		t.Fatal(err)
-	}
-	if err := privacyengine.Select(t.Context(), engineID); err == nil {
-		t.Fatal("selected an unconfigured engine")
-	}
-	if err := privacyengine.Configure(t.Context(), engineID, service.URL, credential); err != nil {
 		t.Fatal(err)
 	}
 	if err := settings.Save(settings.Settings{RedactPersonal: true, RedactModelOff: true}); err != nil {
 		t.Fatal(err)
 	}
-	body := `{"model":"fake/m1","messages":[{"role":"user","content":"contact ` + value + `"}]}`
+	body := `{"model":"fake/m1","messages":[{"role":"user","content":"联络 ` + value + `"}]}`
 	if code, _ := post(t, "/v1/chat/completions", body); code != 200 || strings.Contains(string(f.got), value) {
 		t.Fatalf("built-in engine sent an unprotected request, or returned %d", code)
 	}
@@ -88,9 +68,46 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.reply = strings.Replace(f.reply, `"ok"`, `"`+token+`"`, 1)
-	if code, reply := post(t, "/v1/chat/completions", body); code != 200 ||
-		!strings.Contains(reply, value) || strings.Contains(string(f.got), value) || !strings.Contains(string(f.got), token) {
-		t.Fatalf("Gray engine did not mask and restore: %d %s", code, reply)
+	s := New()
+	reply := httptest.NewRecorder()
+	s.Handler().ServeHTTP(reply, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+	if reply.Code != http.StatusOK || !strings.Contains(reply.Body.String(), value) ||
+		strings.Contains(string(f.got), value) || !strings.Contains(string(f.got), token) {
+		t.Fatalf("hosted engine did not mask and restore: %d %s", reply.Code, reply.Body)
+	}
+	routes := s.Trace(context.Background(), 0, 0).Routes
+	if len(routes) != 1 {
+		t.Fatalf("expected one route, got %d", len(routes))
+	}
+	prompt, ok := s.PromptText(routes[0].ID, PartChat, true)
+	raw, _ := json.Marshal(prompt)
+	if !ok || strings.Contains(string(raw), value) || !strings.Contains(string(raw), token) {
+		t.Fatalf("prompt inspection should contain only the protected request: %s", raw)
+	}
+	if _, _, _, ok := s.ReplyBody(routes[0].ID); ok {
+		t.Fatal("the reply body should not be retained for a plugin-protected request")
+	}
+	upstream, err := provider.Find("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream.Unredacted = true
+	if err := provider.Save(*upstream); err != nil {
+		t.Fatal(err)
+	}
+	plainServer := New()
+	plainReply := httptest.NewRecorder()
+	plainServer.Handler().ServeHTTP(plainReply, httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body)))
+	plainRoutes := plainServer.Trace(context.Background(), 0, 0).Routes
+	if plainReply.Code != http.StatusOK || !strings.Contains(string(f.got), value) || len(plainRoutes) != 1 {
+		t.Fatal("expected a request sent as written to the opted-out provider")
+	}
+	if _, ok := plainServer.PromptText(plainRoutes[0].ID, PartChat, true); ok {
+		t.Fatal("prompt inspection must omit the opted-out provider's request")
+	}
+	upstream.Unredacted = false
+	if err := provider.Save(*upstream); err != nil {
+		t.Fatal(err)
 	}
 	records, _ := maskrec.List(0, 5, maskrec.Filter{})
 	if len(records) < 2 || records[0].Engine != engineID || records[0].EngineName != "Local detector" || records[1].Engine != privacyengine.Builtin {
@@ -110,7 +127,9 @@ data: [DONE]
 	if code, reply := post(t, "/v1/chat/completions", stream); code != 200 || !strings.Contains(reply, value) || strings.Contains(reply, token) {
 		t.Fatalf("Gray engine did not restore a split stream token: %d %s", code, reply)
 	}
-	offline.Store(true)
+	if err := os.WriteFile(filepath.Join(dir, "offline"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	f.got = nil
 	if code, _ := post(t, "/v1/chat/completions", body); code != http.StatusServiceUnavailable || len(f.got) != 0 {
 		t.Fatalf("offline Gray sent a provider request or returned %d", code)
@@ -147,5 +166,11 @@ data: [DONE]
 	}
 	if code, _ := post(t, "/v1/chat/completions", body); code != http.StatusOK || strings.Contains(string(f.got), value) {
 		t.Fatalf("returning to Magpie did not resume masking, got %d", code)
+	}
+	if err := plugin.SetOff(dir, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := privacyengine.Select(t.Context(), engineID); err == nil || privacyengine.ID(settings.Shared()) != privacyengine.Builtin {
+		t.Fatal("selecting an unavailable plugin should leave Magpie selected")
 	}
 }

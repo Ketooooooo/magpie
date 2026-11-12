@@ -1,30 +1,25 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
-	"net/textproto"
+	"io/fs"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"unicode"
-
-	"github.com/yetone/magpie/internal/lazyre"
 )
 
-// PrivacySpec declares a companion engine that implements the local scan protocol.
+// PrivacySpec declares an engine loaded by the existing Bun plugin host.
 type PrivacySpec struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	StatePath   string `json:"statePath"`
-	ScanPath    string `json:"scanPath"`
-	TokenHeader string `json:"tokenHeader"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Protocol  string `json:"protocol"`
+	Entry     string `json:"entry"`
+	MemoryMiB int    `json:"memoryMiB"`
 }
-
-var privacyPath = lazyre.New(`^/[a-zA-Z0-9_/-]+$`)
-var privacyHeader = lazyre.New(`^X-[A-Za-z0-9-]{1,60}$`)
 
 // Privacy reads a plugin's declaration without loading any of its code.
 func Privacy(target string) (spec *PrivacySpec, only bool) {
@@ -45,19 +40,38 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 		return nil, false
 	}
 	s := pkg.Magpie.Privacy
-	if s == nil || !actionID.MatchString(s.ID) || (s.ID == "magpie" || s.ID == "none") || s.Protocol != "http-scan-v1" {
+	if s == nil || !actionID.MatchString(s.ID) || (s.ID == "magpie" || s.ID == "none") {
 		return nil, false
 	}
 	s.Name = strings.TrimSpace(s.Name)
-	s.TokenHeader = textproto.CanonicalMIMEHeaderKey(s.TokenHeader)
-	if s.Name == "" || len(s.Name) > 100 || strings.ContainsFunc(s.Name, unicode.IsControl) ||
-		!privacyHeader.MatchString(s.TokenHeader) || !validPrivacyPath(s.StatePath) || !validPrivacyPath(s.ScanPath) ||
-		s.StatePath == s.ScanPath {
+	if s.Name == "" || len(s.Name) > 100 || strings.ContainsFunc(s.Name, unicode.IsControl) {
+		return nil, false
+	}
+	if s.Protocol != "plugin-scan-v1" || !fs.ValidPath(s.Entry) || !filepath.IsLocal(filepath.FromSlash(s.Entry)) ||
+		!strings.HasSuffix(s.Entry, ".mjs") || s.MemoryMiB < 0 || s.MemoryMiB > 2048 {
 		return nil, false
 	}
 	return s, pkg.Main == "" && len(pkg.Exports) == 0
 }
 
-func validPrivacyPath(p string) bool {
-	return len(p) <= 180 && privacyPath.MatchString(p) && path.Clean(p) == p
+// ProtectWithPlugin calls the package in the existing Bun host. The entry is
+// resolved inside the installed package before any unmasked text is passed.
+func ProtectWithPlugin(ctx context.Context, target string, spec PrivacySpec, directory string, fragments any, version *uint64, preview bool, output any) error {
+	root, err := os.OpenRoot(target)
+	if err != nil {
+		return errors.New("The privacy plugin package is unavailable")
+	}
+	defer root.Close()
+	file, err := root.Stat(filepath.FromSlash(spec.Entry))
+	if err != nil || !file.Mode().IsRegular() {
+		return errors.New("The privacy plugin entry is unavailable")
+	}
+	return Call(ctx, "privacyProtect", map[string]any{
+		"entry":     filepath.Join(target, filepath.FromSlash(spec.Entry)),
+		"directory": directory,
+		"fragments": fragments,
+		"version":   version,
+		"memoryMiB": spec.MemoryMiB,
+		"preview":   preview,
+	}, output)
 }

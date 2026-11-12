@@ -3426,7 +3426,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the card's text is the masked body, even where the request went
 	// unmasked: masked by PromptText when it went whole (#3973)
 	promptRead := func() *Prompt { return nil }
-	if captureBodies {
+	// An external engine's protected request is safe to inspect. A provider
+	// exempt from masking can still receive the original; do not retain it.
+	if captureBodies || (!sentWhole && maskedHits.masker != nil) {
 		promptRead = s.inspectPrompt(tr, from, body, body, sentWhole)
 	}
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint

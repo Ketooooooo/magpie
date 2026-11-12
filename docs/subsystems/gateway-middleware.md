@@ -77,42 +77,36 @@ and installed engines. None disables default masking for new requests.
 Gateway keys that require masking still use the built-in engine in this
 mode. Switching keeps engine configuration and masking history.
 The Magpie engine uses the existing built-in masking settings. Enabled
-installed plugins can declare a companion engine under `magpie.privacy`
-in package.json. Install [the Gray Privacy package](../../examples/plugins/gray-privacy)
-through Plugins, open Configure and enter the local Gray host address and
-token. Picking an unconfigured engine in the selector also opens its
-connection form. The address must be numeric loopback HTTP. The token stays in a
-local private file, separate from the plugin's options. Saving tests the
-connection, and selecting the engine applies it to subsequent requests.
-Magpie keeps its own settings when switching away. Custom masking rules,
-exceptions, category actions and alternate unmasked routes need review
-before switching to a companion.
+installed plugins can declare an engine under `magpie.privacy` in package.json.
+A `plugin-scan-v1` declaration has an engine ID, a name and a package-relative
+`entry` module. Selecting it loads that module in the existing Bun plugin host
+and checks it before changing the setting. The user can install and select the
+package without a service address or token.
 
-The declaration names the engine ID, display name, protocol version,
-two service paths and a custom token header. For `http-scan-v1`, the
-state path returns an `active_version` integer. The scan path accepts
-`text`, `scope`, `version: "active"` and `expected_version`. Its response
-reports completeness, the protected text and ordered byte-range changes.
-Each change includes the original value, placeholder, category and whether
-the change is reversible. Magpie validates and applies the response to
-eligible protocol fields, using the selected engine's rule revision for
-the request. It keeps the mappings with the reply writer. This extension
-uses the installed plugin lifecycle and does not run JavaScript to scan
-requests. An optional plugin page continues to use the existing page
-declaration.
+The module exports `protect(fragments, context)`. It gets a batch of
+`{text, scope}` fragments and the package's private data directory, an abort
+signal, whether this is a preview, and the previous policy version if this
+request already used one. A preview does not persist discoveries.
+It returns `{version, reports}`, with a complete report per fragment, in
+order. The version must stay fixed for a request. Reports describe the
+protected text and replacements, using UTF-8 byte ranges. Reversible masks
+must use the gateway's `{{KIND_token}}` format. The gateway validates the
+reports, performs protocol-aware rewrites and owns the request's restoration
+map. Engine errors stop the request. A native plugin that keeps a model
+resident can declare up to 2048 `memoryMiB` for the Bun host's RSS watchdog.
 
-Disabling or removing the selected plugin, a conflicting engine ID, an
-invalid response or a service outage stops requests requiring that engine.
-The user can select another installed engine explicitly. Insights → Masking
-records the engine ID and name, so records remain readable after a switch,
-disable or uninstall. Companion records show masking diagnostics without a
-lookup of original values. Recent Calls, prompt inspection and body archives
-omit companion-engine conversation bodies while those recorders use
-Magpie's own scrubbing rules.
+Magpie retains its own settings when switching engines. Review custom rules,
+exceptions, category actions and alternate unmasked routes before switching
+to a plugin. Gateway key overrides and providers explicitly configured to
+receive unmasked requests still apply.
 
-The Gray example uses deployed Gray rules. S0R, disclosure approval and a
-shared rule editor need additional integration. Gateway key overrides and
-providers explicitly configured to receive unmasked requests still apply.
+Disabling or removing the selected plugin, a conflicting engine ID, or a
+failed protection call stops requests requiring that engine. Select another
+engine to resume. Insights → Masking keeps the engine ID and name across
+switches and uninstalls. Plugin records show diagnostics without a lookup
+of original values. Prompt inspection reads the protected request. Recent
+Calls and body archives omit plugin-protected conversation bodies because
+those recorders use Magpie's own scrubbing rules.
 
 See [registration](../../internal/privacyengine/engine.go),
 [manifest validation](../../internal/plugin/privacy.go), and the

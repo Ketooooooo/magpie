@@ -64,7 +64,7 @@ func pinPrivacySettings(r *http.Request) (*http.Request, error) {
 }
 
 // Native body recorders can contain restored originals. Only the dedicated
-// masking record captures a protected preview for a companion engine.
+// masking record and prompt inspector have a protected request to retain.
 func nativePrivacyCapture(ctx context.Context) bool {
 	st, err := requestPrivacySettings(ctx)
 	id := privacyengine.ID(st)

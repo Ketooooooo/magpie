@@ -8,8 +8,8 @@ import (
 
 // Fragment is a text field an engine may change without altering protocol structure.
 type Fragment struct {
-	Text  string
-	Scope string
+	Text  string `json:"text"`
+	Scope string `json:"scope"`
 }
 
 // MapFragments lets a batch engine use the same exclusions as built-in masking.
