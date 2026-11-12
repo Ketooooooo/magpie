@@ -49,6 +49,17 @@ type conversationWriter struct {
 	status int
 }
 
+type conversationCaptureKey struct{}
+
+func (w *conversationWriter) enableRecording() {
+	w.full = &spool{limit: conversationBodyMax, pattern: "magpie-conversation-*"}
+}
+
+func pendingConversation(r *http.Request) *conversationWriter {
+	w, _ := r.Context().Value(conversationCaptureKey{}).(*conversationWriter)
+	return w
+}
+
 func (w *conversationWriter) WriteHeader(status int) {
 	if w.status == 0 {
 		w.status = status
@@ -58,22 +69,29 @@ func (w *conversationWriter) WriteHeader(status int) {
 
 // recordConversation wraps the client-facing path, outside middleware and
 // translation, so retries never become duplicate assistant replies.
-func recordConversation(w http.ResponseWriter, r *http.Request, proto provider.Protocol, body []byte) (http.ResponseWriter, func()) {
+func recordConversation(w http.ResponseWriter, r *http.Request, proto provider.Protocol, body []byte) (http.ResponseWriter, *http.Request, func()) {
 	id := sessionOf(r.Header)
 	generation := sessions.GatewayRecordingGeneration()
-	if !settings.Shared().GatewayConversations || id == "" || !nativePrivacyCapture(r.Context()) {
-		return w, func() {}
+	if !settings.Shared().GatewayConversations || id == "" {
+		return w, r, func() {}
 	}
 	at := time.Now()
-	// pictures show as [image]: their base64 out first, so a turn of
-	// pictures isn't cut past conversationBodyMax (leanImages)
-	body = leanImages(body, false)
-	input := append([]byte(nil), body[:min(len(body), conversationBodyMax)]...)
 	sink := &conversationWriter{captureResponseWriter: &captureResponseWriter{
-		ResponseWriter: w, full: &spool{limit: conversationBodyMax, pattern: "magpie-conversation-*"},
+		ResponseWriter: w, omitBody: true,
 	}}
-	return sink, func() {
+	if nativePrivacyCapture(r.Context()) {
+		sink.enableRecording()
+	} else {
+		r = r.WithContext(context.WithValue(r.Context(), conversationCaptureKey{}, sink))
+	}
+	return sink, r, func() {
+		if sink.full == nil {
+			return
+		}
 		defer sink.full.discard()
+		// Remove image data before applying the conversation size limit.
+		body = leanImages(body, false)
+		input := body[:min(len(body), conversationBodyMax)]
 		cut := len(body) > conversationBodyMax || sink.full.cut()
 		output, err := sink.full.read()
 		if err != nil {

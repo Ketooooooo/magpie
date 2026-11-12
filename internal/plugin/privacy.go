@@ -57,9 +57,9 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 
 // ProtectWithPlugin calls the package in the existing Bun host. The entry is
 // resolved inside the installed package before any unmasked text is passed.
-func ProtectWithPlugin(ctx context.Context, target string, spec PrivacySpec, directory string, fragments any, version *uint64, preview bool, output any) error {
+func ProtectWithPlugin(ctx context.Context, target string, spec PrivacySpec, directory string, fragments any, preview bool, output any) error {
 	return callPrivacy(ctx, target, spec, "privacyProtect", map[string]any{
-		"directory": directory, "fragments": fragments, "version": version,
+		"directory": directory, "fragments": fragments,
 		"memoryMiB": spec.MemoryMiB, "preview": preview,
 	}, output)
 }

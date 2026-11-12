@@ -2159,16 +2159,11 @@ func SetMTLS(on bool) error {
 }
 
 // SetPrivacyEngine updates the engine choice against the settings on disk.
-func SetPrivacyEngine(id string, validate func(Settings) error) error {
+func SetPrivacyEngine(id string) error {
 	defer lockFile()()
 	s, err := loadChecked()
 	if err != nil {
 		return err
-	}
-	if validate != nil {
-		if err := validate(s); err != nil {
-			return err
-		}
 	}
 	s.PrivacyEngine = id
 	return save(s, false)

@@ -755,20 +755,15 @@ func (s *Server) images(edit bool) http.HandlerFunc {
 		// user set to go unmasked (unmaskedMembers), as a chat's is
 		var hits maskHits
 		if !unmaskedMembers(tries) {
+			fields := []any{d.Prompt, d.Extra}
 			var unmask func()
-			w, d.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, d.Prompt)
+			w, unmask, hits, err = redactedStrings(r.Context(), w, fields)
 			defer unmask()
-			// the fields passed on as they came are masked as the prompt is,
-			// as a video's are
-			if err == nil {
-				var extra maskHits
-				err = maskStrings(r.Context(), d.Extra, &extra)
-				hits.add(extra)
-			}
 			if err != nil {
 				fail(maskStatus(err), err.Error())
 				return
 			}
+			d.Prompt = fields[0].(string)
 		}
 		// the Routing page lists it as it does a chat, each account or
 		// member asked a try of its one route (sideRoute)

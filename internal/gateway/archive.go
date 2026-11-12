@@ -105,7 +105,7 @@ func archiveDest() (Putter, bool) {
 // before the first 256 KB is cut from it.
 func archiving(r *http.Request, res *captureResponseWriter, start time.Time, body []byte) *wire {
 	to, ok := archiveDest()
-	if !ok || !nativePrivacyCapture(r.Context()) {
+	if !ok {
 		return nil
 	}
 	name, id := archiveID(start)

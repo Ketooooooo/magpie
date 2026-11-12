@@ -41,7 +41,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 		writePrevNotFound(w, id)
 		return
 	}
-	w, recorded := recordConversation(w, r, from, body)
+	w, r, recorded := recordConversation(w, r, from, body)
 	defer recorded()
 	// a conversation going round one tool call is answered here, before
 	// anything of it is asked of a hook, a middleware or a provider

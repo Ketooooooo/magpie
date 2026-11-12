@@ -3528,7 +3528,7 @@ const handlers = {
     const entry = await import(pathToFileURL(p.entry).href)
     if (typeof entry.protect !== "function") throw new Error("Privacy plugin exports no protect function")
     signal.throwIfAborted()
-    const result = await entry.protect(p.fragments, { directory: p.directory, version: p.version, preview: p.preview, signal })
+    const result = await entry.protect(p.fragments, { directory: p.directory, preview: p.preview, signal })
     // The selected engine can keep a native model resident in the shared host.
     privacyMemoryMiB = Math.max(privacyMemoryMiB, p.memoryMiB || 0)
     return result

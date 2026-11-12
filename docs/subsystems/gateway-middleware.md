@@ -85,10 +85,9 @@ package without a service address or token.
 
 The module exports `protect(fragments, context)`. It gets a batch of
 `{text, scope}` fragments and the package's private data directory, an abort
-signal, whether this is a preview, and the previous policy version if this
-request already used one. A preview does not persist discoveries.
-It returns `{version, reports}`, with a complete report per fragment, in
-order. The version must stay fixed for a request. Reports describe the
+signal and whether this is a preview. A preview does not persist discoveries.
+It returns `{reports}`, with a complete report per fragment, in
+order. Reports describe the
 protected text and replacements, using UTF-8 byte ranges. Reversible masks
 must use the gateway's `{{KIND_token}}` format. The gateway validates the
 reports, performs protocol-aware rewrites and owns the request's restoration
@@ -104,15 +103,14 @@ where `values` maps masks to originals restored in visible assistant text.
 Magpie appends the returned text at the end of a successful, single-choice
 Chat Completions reply, including a streaming reply. JSON, structured output,
 tool calls and reasoning fields do not get a notice. If rendering fails, the
-restored reply is delivered without it. In replayed Chat Completions history,
-the gateway marks assistant text fragments with `assistant_text: true`.
-The engine can remove its own suffix before scanning and return the remaining
-prefix as `source_text`. Replacement ranges then refer to that prefix.
+restored reply is delivered without it. Magpie marks the notice with Markdown
+link reference definitions and removes it from assistant history at ingress.
+This also works when the next request uses another engine or skips masking.
 
-Magpie retains its own settings when switching engines. Review custom rules,
-exceptions, category actions and alternate unmasked routes before switching
-to a plugin. Gateway key overrides and providers explicitly configured to
-receive unmasked requests still apply.
+Magpie retains its own custom rules, exceptions, category actions and
+alternate unmasked route when switching engines. These settings apply to its
+built-in engine. Gateway key overrides and providers explicitly configured
+to receive unmasked requests still apply.
 
 Disabling or removing the selected plugin, a conflicting engine ID, or a
 failed protection call stops requests requiring that engine. Select another

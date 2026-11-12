@@ -27,12 +27,11 @@ type Info struct {
 }
 
 type engine struct {
-	info     Info
-	wanted   func(settings.Settings) bool
-	check    func(context.Context) error
-	validate func(settings.Settings) error
-	begin    func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
-	preview  func(context.Context, string) (string, []gwmw.Hit, bool, error)
+	info    Info
+	wanted  func(settings.Settings) bool
+	check   func(context.Context) error
+	begin   func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
+	preview func(context.Context, string) (string, []gwmw.Hit, bool, error)
 }
 
 type registry map[string]engine
@@ -93,13 +92,10 @@ func RequestID(st settings.Settings, forced bool) string {
 // The default engine is registered through the same registry. It can be
 // resolved without reading installed packages on Magpie's normal hot path.
 func lookup(id string) (engine, error) {
-	r := registry{}
 	if id == Builtin {
-		r.register(nativeEngine())
-	} else {
-		r = registered()
+		return nativeEngine(), nil
 	}
-	e, ok := r[id]
+	e, ok := registered()[id]
 	if !ok || e.info.Off {
 		return engine{}, errors.New("The selected privacy plugin is unavailable. Install or enable it in Plugins, or select another engine")
 	}
@@ -111,7 +107,7 @@ func lookup(id string) (engine, error) {
 
 func Select(ctx context.Context, id string) error {
 	if id == Disabled {
-		return settings.SetPrivacyEngine(id, nil)
+		return settings.SetPrivacyEngine(id)
 	}
 	e, err := lookup(id)
 	if err != nil {
@@ -122,7 +118,7 @@ func Select(ctx context.Context, id string) error {
 			return err
 		}
 	}
-	return settings.SetPrivacyEngine(id, e.validate)
+	return settings.SetPrivacyEngine(id)
 }
 
 func Wanted(st settings.Settings) bool {
@@ -146,11 +142,6 @@ func Begin(ctx context.Context, st settings.Settings, forced bool) (context.Cont
 	if err != nil {
 		return ctx, nil, err
 	}
-	if e.validate != nil {
-		if err := e.validate(st); err != nil {
-			return ctx, nil, err
-		}
-	}
 	return e.begin(ctx, st, forced)
 }
 
@@ -162,11 +153,6 @@ func Preview(ctx context.Context, st settings.Settings, input string) (string, [
 	e, err := lookup(id)
 	if err != nil {
 		return "", nil, false, err
-	}
-	if e.validate != nil {
-		if err := e.validate(st); err != nil {
-			return "", nil, false, err
-		}
 	}
 	return e.preview(ctx, input)
 }

@@ -8,9 +8,8 @@ import (
 
 // Fragment is a text field an engine may change without altering protocol structure.
 type Fragment struct {
-	Text          string `json:"text"`
-	Scope         string `json:"scope"`
-	AssistantText bool   `json:"assistant_text,omitempty"`
+	Text  string `json:"text"`
+	Scope string `json:"scope"`
 }
 
 // MapFragments lets a batch engine use the same exclusions as built-in masking.
@@ -25,8 +24,7 @@ func MapFragments(body []byte, transform func([]Fragment) []string) ([]byte, boo
 			return text
 		}
 		scope := "user"
-		assistantText := false
-		parts := strings.SplitN(path, ".", 4)
+		parts := strings.SplitN(path, ".", 3)
 		switch {
 		case under(path, defs):
 			scope = "tool_definition"
@@ -43,19 +41,10 @@ func MapFragments(body []byte, transform func([]Fragment) []string) ([]byte, boo
 					scope = "system"
 				case "tool", "function":
 					scope = "tool"
-				case "assistant":
-					if parts[0] == "messages" && parts[2] == "content" {
-						assistantText = len(parts) == 3
-						if len(parts) == 4 {
-							index, field, ok := strings.Cut(parts[3], ".")
-							assistantText = ok && field == "text" &&
-								gjson.GetBytes(body, item+".content."+index+".type").String() == "text"
-						}
-					}
 				}
 			}
 		}
-		fragments = append(fragments, Fragment{Text: text, Scope: scope, AssistantText: assistantText})
+		fragments = append(fragments, Fragment{Text: text, Scope: scope})
 		return text
 	}); !ok {
 		return nil, false

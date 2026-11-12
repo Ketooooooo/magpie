@@ -14,6 +14,7 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
+	"github.com/yetone/magpie/internal/redact"
 )
 
 // Bound a single body and its read time without limiting how long a client
@@ -121,6 +122,7 @@ func (s *Server) readRequestBody(w http.ResponseWriter, r *http.Request, from pr
 		writeError(w, from, http.StatusServiceUnavailable, err.Error())
 		return nil, false
 	}
+	body = redact.StripReplyNotices(body)
 	holdBody(r.Context(), body)
 	return body, true
 }

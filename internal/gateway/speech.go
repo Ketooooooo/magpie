@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/provider"
@@ -54,31 +55,29 @@ var spoken = []string{"input", "instructions"}
 // audio, so nothing is put back: a masked value is read aloud as its
 // placeholder.
 func (sp *speechRequest) mask(ctx context.Context, w http.ResponseWriter) (http.ResponseWriter, func(), maskHits, string, error) {
-	var all maskHits
-	var sent []string
+	var keys, texts []string
 	for _, k := range spoken {
 		var v string
 		if json.Unmarshal(sp.req[k], &v) != nil || v == "" {
 			continue
 		}
-		_, masked, h, err := maskTextHits(ctx, v)
-		if err != nil {
-			return w, func() {}, maskHits{}, "", err
-		}
-		all.add(h)
-		sent = append(sent, masked)
-		if masked != v {
-			sp.req[k], _ = json.Marshal(masked)
+		keys, texts = append(keys, k), append(texts, v)
+	}
+	if len(texts) == 0 {
+		return w, func() {}, maskHits{}, "", nil
+	}
+	_, hits, err := maskTexts(ctx, texts)
+	if err != nil {
+		return w, func() {}, maskHits{}, "", err
+	}
+	for i, k := range keys {
+		var original string
+		json.Unmarshal(sp.req[k], &original)
+		if texts[i] != original {
+			sp.req[k], _ = json.Marshal(texts[i])
 		}
 	}
-	text := ""
-	for i, t := range sent {
-		if i > 0 {
-			text += "\n\n"
-		}
-		text += t
-	}
-	return w, func() {}, all, text, nil
+	return w, func() {}, hits, strings.Join(texts, "\n\n"), nil
 }
 
 func (sp *speechRequest) forModel(model string) ([]byte, string, error) {

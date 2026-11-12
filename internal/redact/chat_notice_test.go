@@ -23,7 +23,7 @@ func TestChatNoticeSkipsNonTextOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reply := httptest.NewRecorder()
-			writer := NewRestoringWriter(reply, restore, func(map[string]int) string {
+			writer := NewRestoringWriter(reply, restore, nil, func(map[string]int) string {
 				t.Error("non-chat content must not render a notice")
 				return ""
 			})

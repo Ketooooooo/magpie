@@ -6,10 +6,8 @@ import (
 	"errors"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/redact"
@@ -28,28 +26,24 @@ func pluginPreview(ctx context.Context, input, name string, protect protectBatch
 	return out.text, out.hits, false, err
 }
 
-type protectBatch func(context.Context, []redact.Fragment, *uint64) ([]scanReport, uint64, error)
+type protectBatch func(context.Context, []redact.Fragment) ([]scanReport, error)
 
+// A masker protects one batch before its restoration map is used by Writer.
 type pluginMasker struct {
-	name       string
-	scan       protectBatch
-	mu         sync.Mutex
-	ctx        context.Context
-	values     map[string]string
-	version    *uint64
-	reports    map[redact.Fragment]scanReport
-	notice     func(context.Context, map[string]string) string
-	chatNotice bool
+	name   string
+	scan   protectBatch
+	ctx    context.Context
+	values map[string]string
+	notice func(context.Context, map[string]string) string
 }
 
 func newPluginMasker(ctx context.Context, name string, scan protectBatch) *pluginMasker {
-	return &pluginMasker{name: name, scan: scan, ctx: ctx, values: map[string]string{}, reports: map[redact.Fragment]scanReport{}}
+	return &pluginMasker{name: name, scan: scan, ctx: ctx, values: map[string]string{}}
 }
 
 type scanReport struct {
-	Complete  bool    `json:"complete"`
-	Protected string  `json:"protected_text"`
-	Source    *string `json:"source_text"`
+	Complete  bool   `json:"complete"`
+	Protected string `json:"protected_text"`
 	Changes   []struct {
 		Start      int    `json:"start"`
 		End        int    `json:"end"`
@@ -63,29 +57,25 @@ type scanReport struct {
 var maskToken = lazyre.New(`\{\{[A-Z0-9_]+_[a-z2-7]+\}\}`)
 
 func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment) ([]string, []gwmw.Hit) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
 	var pending []redact.Fragment
-	seen := map[redact.Fragment]bool{}
+	indexes := map[redact.Fragment]int{}
 	for _, fragment := range fragments {
-		if _, cached := m.reports[fragment]; fragment.Text != "" && !cached && !seen[fragment] {
+		if _, seen := indexes[fragment]; fragment.Text != "" && !seen {
+			indexes[fragment] = len(pending)
 			pending = append(pending, fragment)
-			seen[fragment] = true
 		}
 	}
+	var reports []scanReport
 	if len(pending) > 0 {
-		reports, version, err := m.scan(ctx, pending, m.version)
+		ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		var err error
+		reports, err = m.scan(ctx, pending)
 		if err != nil {
 			panic(err)
 		}
-		if len(reports) != len(pending) || (m.version != nil && *m.version != version) {
-			panic(errors.New("The privacy plugin returned a different batch or policy version"))
-		}
-		m.version = &version
-		for i, fragment := range pending {
-			m.reports[fragment] = reports[i]
+		if len(reports) != len(pending) {
+			panic(errors.New("The privacy plugin returned a different batch"))
 		}
 	}
 	var hits []gwmw.Hit
@@ -95,25 +85,18 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 			texts = append(texts, "")
 			continue
 		}
-		report := m.reports[f]
+		report := reports[indexes[f]]
 		if !report.Complete {
 			panic(errors.New("The privacy plugin could not complete protection"))
 		}
 		var protected strings.Builder
-		source := f.Text
-		if report.Source != nil {
-			source = *report.Source
-			if !f.AssistantText || !strings.HasPrefix(f.Text, source) {
-				panic(errors.New("The privacy plugin returned invalid assistant history"))
-			}
-		}
 		last := 0
 		for _, change := range report.Changes {
-			if change.Start < last || change.End <= change.Start || change.End > len(source) ||
-				source[change.Start:change.End] != change.Value {
+			if change.Start < last || change.End <= change.Start || change.End > len(f.Text) ||
+				f.Text[change.Start:change.End] != change.Value {
 				panic(errors.New("The privacy plugin returned an invalid replacement range"))
 			}
-			protected.WriteString(source[last:change.Start])
+			protected.WriteString(f.Text[last:change.Start])
 			protected.WriteString(change.Mask)
 			last = change.End
 			if change.Reversible {
@@ -127,7 +110,7 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 			}
 			hits = append(hits, gwmw.Hit{Kind: change.Category, By: "rule", Placeholder: change.Mask})
 		}
-		protected.WriteString(source[last:])
+		protected.WriteString(f.Text[last:])
 		if protected.String() != report.Protected {
 			panic(errors.New("The privacy plugin returned inconsistent protected text"))
 		}
@@ -146,18 +129,20 @@ func (m *pluginMasker) JSONHitsContext(ctx context.Context, body []byte) ([]byte
 	if !ok {
 		panic(errors.New("The privacy plugin could not read the request"))
 	}
-	if m.notice != nil {
-		format := gjson.GetBytes(body, "response_format")
-		m.chatNotice = gjson.GetBytes(body, "messages").IsArray() &&
-			gjson.GetBytes(body, "n").Int() <= 1 &&
-			(!format.Exists() || format.Raw == "null" || format.Get("type").String() == "text")
-	}
 	return out, hits
 }
 
 func (m *pluginMasker) TextHitsContext(ctx context.Context, text string) (string, []gwmw.Hit) {
-	out, hits := m.protect(ctx, []redact.Fragment{{Text: text, Scope: "user"}})
+	out, hits := m.TextsHitsContext(ctx, []string{text})
 	return out[0], hits
+}
+
+func (m *pluginMasker) TextsHitsContext(ctx context.Context, texts []string) ([]string, []gwmw.Hit) {
+	fragments := make([]redact.Fragment, len(texts))
+	for i, text := range texts {
+		fragments[i] = redact.Fragment{Text: text, Scope: "user"}
+	}
+	return m.protect(ctx, fragments)
 }
 
 func (m *pluginMasker) JSONHits(body []byte) ([]byte, []gwmw.Hit) {
@@ -167,8 +152,6 @@ func (m *pluginMasker) TextHits(s string) (string, []gwmw.Hit) { return m.TextHi
 func (m *pluginMasker) JSON(b []byte) ([]byte, int)            { out, h := m.JSONHits(b); return out, len(h) }
 func (m *pluginMasker) Text(s string) (string, int)            { out, h := m.TextHits(s); return out, len(h) }
 func (m *pluginMasker) Value(token string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	v, ok := m.values[token]
 	return v, ok
 }
@@ -194,9 +177,37 @@ func (m *pluginMasker) restore(text string, escaped bool, put map[string]int) st
 	})
 }
 
+// partialTail only holds suffixes that can finish a mask from this request.
+func (m *pluginMasker) partialTail(text string) int {
+	last := strings.LastIndexByte(text, '{')
+	if last > 0 && text[last-1] == '{' {
+		tail := text[last-1:]
+		for token := range m.values {
+			if len(tail) < len(token) && strings.HasPrefix(token, tail) {
+				return len(tail)
+			}
+		}
+	}
+	if last >= 0 && last == len(text)-1 {
+		return 1
+	}
+	return 0
+}
+
 func (m *pluginMasker) Writer(w http.ResponseWriter) (http.ResponseWriter, func()) {
+	return m.replyWriter(w, false)
+}
+
+func (m *pluginMasker) WriterWithNotice(w http.ResponseWriter) (http.ResponseWriter, func()) {
+	return m.replyWriter(w, true)
+}
+
+func (m *pluginMasker) replyWriter(w http.ResponseWriter, present bool) (http.ResponseWriter, func()) {
+	if len(m.values) == 0 {
+		return w, func() {}
+	}
 	var notice func(map[string]int) string
-	if m.chatNotice {
+	if present && m.notice != nil {
 		notice = func(put map[string]int) string {
 			values := make(map[string]string, len(put))
 			for token := range put {
@@ -209,7 +220,7 @@ func (m *pluginMasker) Writer(w http.ResponseWriter) (http.ResponseWriter, func(
 			return m.notice(ctx, values)
 		}
 	}
-	writer := redact.NewRestoringWriter(w, m.restore, notice)
+	writer := redact.NewRestoringWriter(w, m.restore, m.partialTail, notice)
 	return writer, writer.Finish
 }
 

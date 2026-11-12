@@ -46,14 +46,12 @@ export function renderNotice(values) {
 }
 export function protect(fragments) {
   if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
-  return { version: 1, reports: fragments.map(({text, assistant_text}) => {
-    const source = assistant_text ? text.split(heading)[0] : text;
+  return { reports: fragments.map(({text}) => {
     const value = "` + value + `", token = "` + token + `";
-    const index = source.indexOf(value);
-    const start = Buffer.byteLength(source.slice(0, index));
+    const index = text.indexOf(value);
+    const start = Buffer.byteLength(text.slice(0, index));
     const changes = index >= 0 ? [{start, end: start + value.length, value, placeholder: token, category: "EMAIL", reversible: true}] : [];
-    return {complete: true, protected_text: source.replace(value, token), changes,
-      source_text: source === text ? undefined : source};
+    return {complete: true, protected_text: text.replace(value, token), changes};
   }) };
 }
 `
@@ -84,7 +82,8 @@ export function protect(fragments) {
 		t.Fatalf("hosted engine did not mask and restore: %d %s", reply.Code, reply.Body)
 	}
 	content := gjson.Get(reply.Body.String(), "choices.0.message.content").String()
-	notice := "\n\nMasked values\n\n- [" + value + `](#mask "` + token + `")`
+	notice := "\n\n[magpie-privacy-notice-start]: #magpie-privacy-notice\n\nMasked values\n\n- [" + value +
+		`](#mask "` + token + `")` + "\n\n[magpie-privacy-notice-end]: #magpie-privacy-notice"
 	if content != value+notice {
 		t.Fatalf("reply should restore the body and add the plugin notice, got %q", content)
 	}
@@ -125,6 +124,17 @@ export function protect(fragments) {
 	records, _ := maskrec.List(0, 5, maskrec.Filter{})
 	if len(records) < 2 || records[0].Engine != engineID || records[0].EngineName != "Local detector" || records[1].Engine != privacyengine.Builtin {
 		t.Fatalf("expected consecutive Gray and Magpie records, got %+v", records)
+	}
+	structured := strings.Replace(body, `{"model":`, `{"response_format":{"type":"json_object"},"model":`, 1)
+	if code, reply := post(t, "/v1/chat/completions", structured); code != http.StatusOK ||
+		gjson.Get(reply, "choices.0.message.content").String() != value {
+		t.Fatalf("structured requests must skip the reply notice, got %d %s", code, reply)
+	}
+	internalReply := httptest.NewRecorder()
+	internalReq := httptest.NewRequest("POST", "/v1/chat/completions", nil)
+	New().serve(internalReply, internalReq.WithContext(ownAsk(internalReq.Context())), provider.Chat, []byte(body))
+	if internalReply.Code != http.StatusOK || gjson.Get(internalReply.Body.String(), "choices.0.message.content").String() != value {
+		t.Fatalf("internal requests must skip the reply notice, got %d %s", internalReply.Code, internalReply.Body.String())
 	}
 	f.ctype = "text/event-stream"
 	f.reply = `data: {"id":"chatcmpl-2","object":"chat.completion.chunk","model":"m1","choices":[{"index":0,"delta":{"content":"{{EMAIL_xxx"}}]}
@@ -203,5 +213,35 @@ data: [DONE]
 	}
 	if err := privacyengine.Select(t.Context(), engineID); err == nil || privacyengine.ID(settings.Shared()) != privacyengine.Builtin {
 		t.Fatal("selecting an unavailable plugin should leave Magpie selected")
+	}
+}
+
+func TestPrivacyNoticeRemovedBeforeEngineSelection(t *testing.T) {
+	const legacy = "\n\n🔒 Gray masked the following values before sending them to the model.\n\n" +
+		`- [preview@example.org](#gray-mask "{{EMAIL_abcdefgh}}")`
+	const wrapped = "\n\n[magpie-privacy-notice-start]: #magpie-privacy-notice\n\nTest preview\n\n" +
+		"[magpie-privacy-notice-end]: #magpie-privacy-notice"
+	for _, engine := range []string{privacyengine.Builtin, privacyengine.Disabled} {
+		t.Run(engine, func(t *testing.T) {
+			f := &fake{ctype: "application/json", reply: `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`}
+			setup(t, provider.Chat, f)
+			if err := settings.Save(settings.Settings{PrivacyEngine: engine, RedactPersonal: true, RedactModelOff: true}); err != nil {
+				t.Fatal(err)
+			}
+			body, _ := json.Marshal(map[string]any{"model": "fake/m1", "messages": []map[string]string{
+				{"role": "assistant", "content": "First reply." + legacy},
+				{"role": "assistant", "content": "Second reply." + wrapped},
+				{"role": "user", "content": "Continue." + wrapped},
+			}})
+			if code, _ := post(t, "/v1/chat/completions", string(body)); code != http.StatusOK {
+				t.Fatalf("request returned %d", code)
+			}
+			messages := gjson.GetBytes(f.got, "messages").Array()
+			if len(messages) != 3 || messages[0].Get("content").String() != "First reply." ||
+				messages[1].Get("content").String() != "Second reply." ||
+				messages[2].Get("content").String() != "Continue."+wrapped {
+				t.Fatalf("notice cleanup should apply only to assistant history, got %s", f.got)
+			}
+		})
 	}
 }

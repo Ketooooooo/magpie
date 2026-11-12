@@ -2,6 +2,7 @@ package redact
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ type Writer struct {
 	pending *held
 	done    bool
 	replace restoreText
+	tail    func(string) int
 	put     map[string]int // placeholders put back, each place counted
 	notice  *chatNotice
 }
@@ -43,11 +45,11 @@ type held struct {
 }
 
 // NewWriter wraps w; Finish must be called when the handler is done.
-func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w} }
+func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w, tail: partialTail} }
 
 // NewRestoringWriter frames replies for a request-bound engine.
-func NewRestoringWriter(w http.ResponseWriter, replace restoreText, renderNotice func(map[string]int) string) *Writer {
-	rw := &Writer{w: w, replace: replace}
+func NewRestoringWriter(w http.ResponseWriter, replace restoreText, tail func(string) int, renderNotice func(map[string]int) string) *Writer {
+	rw := &Writer{w: w, replace: replace, tail: tail}
 	if renderNotice != nil {
 		rw.notice = &chatNotice{render: renderNotice}
 	}
@@ -208,7 +210,13 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace, rw.notice))
+		mediaType, _, _ := strings.Cut(rw.Header().Get("Content-Type"), ";")
+		if rw.replace != nil && strings.EqualFold(strings.TrimSpace(mediaType), "text/plain") &&
+			!json.Valid(rw.buf.Bytes()) {
+			rw.w.Write([]byte(rw.restore(rw.buf.String(), false, rw.count())))
+		} else {
+			rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace, rw.notice))
+		}
 	case stream:
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
@@ -290,8 +298,8 @@ func (rw *Writer) event(ev []byte) error {
 		// the tail is looked for before anything is put back, so a
 		// placeholder whose last brace is still to come isn't put back
 		// without it and the brace left behind
-		if !kept[key] && key != "obfuscation" {
-			if n := partialTail(s); n > 0 {
+		if rw.tail != nil && !kept[key] && key != "obfuscation" {
+			if n := rw.tail(s); n > 0 {
 				if tails == nil {
 					tails, cuts = map[string]string{}, map[string]string{}
 				}

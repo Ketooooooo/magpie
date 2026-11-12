@@ -38,7 +38,6 @@ var OnMasked func(maskrec.Record)
 type maskHits struct {
 	engine     string
 	engineName string
-	masker     gwmw.Masker
 	n          int
 	hits       []gwmw.Hit
 	took       time.Duration // how long masking took
