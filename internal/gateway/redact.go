@@ -120,7 +120,7 @@ func redactedHits(ctx context.Context, w http.ResponseWriter, body []byte) (http
 	if err != nil {
 		return w, body, func() {}, maskHits{}, err
 	}
-	if o.h.n == 0 { // only values sent as written: told, nothing masked
+	if o.h.n == 0 && o.h.engine == privacyengine.Builtin { // built-in allow-only hits don't rewrite the request
 		o.b = body
 	}
 	// put back even when this request masked nothing: a conversation

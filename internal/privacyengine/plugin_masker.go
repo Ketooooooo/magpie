@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/redact"
@@ -30,13 +31,15 @@ func pluginPreview(ctx context.Context, input, name string, protect protectBatch
 type protectBatch func(context.Context, []redact.Fragment, *uint64) ([]scanReport, uint64, error)
 
 type pluginMasker struct {
-	name    string
-	scan    protectBatch
-	mu      sync.Mutex
-	ctx     context.Context
-	values  map[string]string
-	version *uint64
-	reports map[redact.Fragment]scanReport
+	name       string
+	scan       protectBatch
+	mu         sync.Mutex
+	ctx        context.Context
+	values     map[string]string
+	version    *uint64
+	reports    map[redact.Fragment]scanReport
+	notice     func(context.Context, map[string]string) string
+	chatNotice bool
 }
 
 func newPluginMasker(ctx context.Context, name string, scan protectBatch) *pluginMasker {
@@ -44,8 +47,9 @@ func newPluginMasker(ctx context.Context, name string, scan protectBatch) *plugi
 }
 
 type scanReport struct {
-	Complete  bool   `json:"complete"`
-	Protected string `json:"protected_text"`
+	Complete  bool    `json:"complete"`
+	Protected string  `json:"protected_text"`
+	Source    *string `json:"source_text"`
 	Changes   []struct {
 		Start      int    `json:"start"`
 		End        int    `json:"end"`
@@ -96,13 +100,20 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 			panic(errors.New("The privacy plugin could not complete protection"))
 		}
 		var protected strings.Builder
+		source := f.Text
+		if report.Source != nil {
+			source = *report.Source
+			if !f.AssistantText || !strings.HasPrefix(f.Text, source) {
+				panic(errors.New("The privacy plugin returned invalid assistant history"))
+			}
+		}
 		last := 0
 		for _, change := range report.Changes {
-			if change.Start < last || change.End <= change.Start || change.End > len(f.Text) ||
-				f.Text[change.Start:change.End] != change.Value {
+			if change.Start < last || change.End <= change.Start || change.End > len(source) ||
+				source[change.Start:change.End] != change.Value {
 				panic(errors.New("The privacy plugin returned an invalid replacement range"))
 			}
-			protected.WriteString(f.Text[last:change.Start])
+			protected.WriteString(source[last:change.Start])
 			protected.WriteString(change.Mask)
 			last = change.End
 			if change.Reversible {
@@ -116,7 +127,7 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 			}
 			hits = append(hits, gwmw.Hit{Kind: change.Category, By: "rule", Placeholder: change.Mask})
 		}
-		protected.WriteString(f.Text[last:])
+		protected.WriteString(source[last:])
 		if protected.String() != report.Protected {
 			panic(errors.New("The privacy plugin returned inconsistent protected text"))
 		}
@@ -134,6 +145,12 @@ func (m *pluginMasker) JSONHitsContext(ctx context.Context, body []byte) ([]byte
 	})
 	if !ok {
 		panic(errors.New("The privacy plugin could not read the request"))
+	}
+	if m.notice != nil {
+		format := gjson.GetBytes(body, "response_format")
+		m.chatNotice = gjson.GetBytes(body, "messages").IsArray() &&
+			gjson.GetBytes(body, "n").Int() <= 1 &&
+			(!format.Exists() || format.Raw == "null" || format.Get("type").String() == "text")
 	}
 	return out, hits
 }
@@ -178,7 +195,21 @@ func (m *pluginMasker) restore(text string, escaped bool, put map[string]int) st
 }
 
 func (m *pluginMasker) Writer(w http.ResponseWriter) (http.ResponseWriter, func()) {
-	writer := redact.NewRestoringWriter(w, m.restore)
+	var notice func(map[string]int) string
+	if m.chatNotice {
+		notice = func(put map[string]int) string {
+			values := make(map[string]string, len(put))
+			for token := range put {
+				if value, ok := m.Value(token); ok {
+					values[token] = value
+				}
+			}
+			ctx, cancel := context.WithTimeout(m.ctx, time.Second)
+			defer cancel()
+			return m.notice(ctx, values)
+		}
+	}
+	writer := redact.NewRestoringWriter(w, m.restore, notice)
 	return writer, writer.Finish
 }
 

@@ -38,7 +38,6 @@ import (
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/pluginrt"
-	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
@@ -3833,23 +3832,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 		// a middleware's onProvider changes what this provider is sent
-		beforeProvider := attemptBody
 		attemptBody = triedOn(r.Context(), c.p, c.model, attemptBody)
 		// the system prompt the user gave this model goes after the
 		// agent's own (model_system.go)
 		attemptBody = withModelSystem(r, c.p, c.model, from, attemptBody)
-		if t, ok := maskedHits.masker.(gwmw.ContextTeller); ok && maskedHits.engine != privacyengine.Builtin && !bytes.Equal(beforeProvider, attemptBody) {
-			protected, err := gwmw.Safely(func() []byte {
-				b, _ := t.JSONHitsContext(r.Context(), attemptBody)
-				return b
-			})
-			if err != nil {
-				call.Status, call.Error = http.StatusServiceUnavailable, err.Error()
-				failTo(w, kept, from, call.Status, call.Error)
-				return
-			}
-			attemptBody = protected
-		}
 		if !s.fits(c.p.ID, webpRefused, from) {
 			// a provider that took a webp picture for one it can't read
 			// (webp.go) has every one of its requests' webps written again

@@ -95,6 +95,20 @@ reports, performs protocol-aware rewrites and owns the request's restoration
 map. Engine errors stop the request. A native plugin that keeps a model
 resident can declare up to 2048 `memoryMiB` for the Bun host's RSS watchdog.
 
+Masking runs at the gateway's normal request boundary for both built-in and
+installed engines. Provider middleware and model system prompts added later
+are sent as configured.
+
+An engine can declare `replyNotice: true` and export `renderNotice(values)`,
+where `values` maps masks to originals restored in visible assistant text.
+Magpie appends the returned text at the end of a successful, single-choice
+Chat Completions reply, including a streaming reply. JSON, structured output,
+tool calls and reasoning fields do not get a notice. If rendering fails, the
+restored reply is delivered without it. In replayed Chat Completions history,
+the gateway marks assistant text fragments with `assistant_text: true`.
+The engine can remove its own suffix before scanning and return the remaining
+prefix as `source_text`. Replacement ranges then refer to that prefix.
+
 Magpie retains its own settings when switching engines. Review custom rules,
 exceptions, category actions and alternate unmasked routes before switching
 to a plugin. Gateway key overrides and providers explicitly configured to

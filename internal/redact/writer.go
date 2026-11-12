@@ -24,6 +24,7 @@ type Writer struct {
 	done    bool
 	replace restoreText
 	put     map[string]int // placeholders put back, each place counted
+	notice  *chatNotice
 }
 
 const (
@@ -45,8 +46,12 @@ type held struct {
 func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w} }
 
 // NewRestoringWriter frames replies for a request-bound engine.
-func NewRestoringWriter(w http.ResponseWriter, replace restoreText) *Writer {
-	return &Writer{w: w, replace: replace}
+func NewRestoringWriter(w http.ResponseWriter, replace restoreText, renderNotice func(map[string]int) string) *Writer {
+	rw := &Writer{w: w, replace: replace}
+	if renderNotice != nil {
+		rw.notice = &chatNotice{render: renderNotice}
+	}
+	return rw
 }
 
 func (rw *Writer) restore(text string, escaped bool, put map[string]int) string {
@@ -102,6 +107,9 @@ func binaryType(ct string) bool {
 }
 
 func (rw *Writer) WriteHeader(code int) {
+	if code >= 300 {
+		rw.notice = nil
+	}
 	if rw.mode == unknown {
 		h := rw.w.Header()
 		if ct := h.Get("Content-Type"); ct != "" {
@@ -200,7 +208,7 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace))
+		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace, rw.notice))
 	case stream:
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
@@ -241,7 +249,7 @@ func (rw *Writer) event(ev []byte) error {
 		// piece held: released for it, the held piece went out with the
 		// start of its placeholder as it was, the next piece with the
 		// rest, and neither was a placeholder to put back (#5287)
-		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count(), rw.replace), post))
+		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count(), rw.replace, nil), post))
 		return err
 	}
 	ctx := name + "|" + eventCtx(data)
@@ -253,8 +261,13 @@ func (rw *Writer) event(ev []byte) error {
 				return err
 			}
 			carry = p.tails
-		} else if _, err := rw.w.Write(p.full); err != nil {
-			return err
+		} else {
+			if rw.notice != nil && p.tails[chatDeltaText] != "" {
+				rw.notice.skip = true // the previous text tail was sent as written
+			}
+			if _, err := rw.w.Write(p.full); err != nil {
+				return err
+			}
 		}
 		rw.pending = nil
 	}
@@ -263,8 +276,10 @@ func (rw *Writer) event(ev []byte) error {
 		typ = name
 	}
 	signed := signedReplyFields(data, rw.replace != nil)
+	choice := rw.notice.choice(data, "delta")
 	var tails, cuts map[string]string
-	restored, _ := walk(data, func(path, key, s string) string {
+	restored, valid := walk(data, func(path, key, s string) string {
+		masked := s
 		if c, ok := carry[path]; ok {
 			s = c + s
 		}
@@ -286,8 +301,21 @@ func (rw *Writer) event(ev []byte) error {
 		}
 		// counted here only: cut is s again without its tail, and
 		// whichever of the two goes out, the places are these
+		if path == chatDeltaText && choice.Exists() {
+			put := make(map[string]int)
+			text := rw.restore(s, false, put)
+			emitted := text
+			if cut, ok := cuts[path]; ok {
+				emitted = cut
+			}
+			rw.notice.record(masked, emitted, put, rw.count())
+			return text
+		}
 		return rw.restore(s, asJSON(key, typ), rw.count())
 	})
+	if valid && tails[chatDeltaText] == "" {
+		restored = rw.notice.append(restored, choice, "delta")
+	}
 	full := rebuild(pre, restored, post)
 	if tails == nil {
 		_, err := rw.w.Write(full)

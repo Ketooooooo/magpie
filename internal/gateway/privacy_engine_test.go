@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tidwall/gjson"
+
 	"github.com/yetone/magpie/internal/maskrec"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/privacyengine"
@@ -35,17 +37,23 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatalf("before installation, only Magpie should be listed: %+v", got)
 	}
 	dir := t.TempDir()
-	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"plugin-scan-v1","entry":"privacy.mjs"}}}`
+	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"plugin-scan-v1","entry":"privacy.mjs","replyNotice":true}}}`
 	code := `
 import { existsSync } from "node:fs";
+const heading = "\n\nMasked values\n\n";
+export function renderNotice(values) {
+  return heading + Object.entries(values).map(([token, value]) => '- [' + value + '](#mask "' + token + '")').join("\n");
+}
 export function protect(fragments) {
   if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
-  return { version: 1, reports: fragments.map(({text}) => {
+  return { version: 1, reports: fragments.map(({text, assistant_text}) => {
+    const source = assistant_text ? text.split(heading)[0] : text;
     const value = "` + value + `", token = "` + token + `";
-    const index = text.indexOf(value);
-    const start = Buffer.byteLength(text.slice(0, index));
+    const index = source.indexOf(value);
+    const start = Buffer.byteLength(source.slice(0, index));
     const changes = index >= 0 ? [{start, end: start + value.length, value, placeholder: token, category: "EMAIL", reversible: true}] : [];
-    return {complete: true, protected_text: text.replace(value, token), changes};
+    return {complete: true, protected_text: source.replace(value, token), changes,
+      source_text: source === text ? undefined : source};
   }) };
 }
 `
@@ -74,6 +82,11 @@ export function protect(fragments) {
 	if reply.Code != http.StatusOK || !strings.Contains(reply.Body.String(), value) ||
 		strings.Contains(string(f.got), value) || !strings.Contains(string(f.got), token) {
 		t.Fatalf("hosted engine did not mask and restore: %d %s", reply.Code, reply.Body)
+	}
+	content := gjson.Get(reply.Body.String(), "choices.0.message.content").String()
+	notice := "\n\nMasked values\n\n- [" + value + `](#mask "` + token + `")`
+	if content != value+notice {
+		t.Fatalf("reply should restore the body and add the plugin notice, got %q", content)
 	}
 	routes := s.Trace(context.Background(), 0, 0).Routes
 	if len(routes) != 1 {
@@ -124,8 +137,26 @@ data: [DONE]
 
 `
 	stream := strings.Replace(body, `"model":`, `"stream":true,"model":`, 1)
-	if code, reply := post(t, "/v1/chat/completions", stream); code != 200 || !strings.Contains(reply, value) || strings.Contains(reply, token) {
-		t.Fatalf("Gray engine did not restore a split stream token: %d %s", code, reply)
+	if code, reply := post(t, "/v1/chat/completions", stream); code != 200 ||
+		strings.Count(reply, token) != 1 || strings.Count(reply, value) != 2 ||
+		!strings.Contains(reply, "#mask") || strings.Index(reply, "#mask") > strings.Index(reply, "[DONE]") {
+		t.Fatalf("Gray engine did not restore a split stream token and add its notice: %d %s", code, reply)
+	}
+	f.ctype = "application/json"
+	f.reply = ordinaryReply
+	for _, original := range []string{value, "plain"} {
+		history := map[string]any{"model": "fake/m1", "messages": []map[string]string{
+			{"role": "assistant", "content": original + notice},
+			{"role": "user", "content": "Continue"},
+		}}
+		raw, _ := json.Marshal(history)
+		if code, _ := post(t, "/v1/chat/completions", string(raw)); code != 200 {
+			t.Fatalf("assistant history failed: %d", code)
+		}
+		if strings.Contains(string(f.got), "#mask") || strings.Contains(string(f.got), value) ||
+			!strings.Contains(string(f.got), strings.ReplaceAll(original, value, token)) {
+			t.Fatalf("assistant history did not lose its notice and retain its protected body: %s", f.got)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "offline"), nil, 0o600); err != nil {
 		t.Fatal(err)

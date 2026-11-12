@@ -566,13 +566,13 @@ func typeOf(data []byte) string {
 }
 
 // RestoreJSON puts the values back in a response body.
-func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil, nil) }
+func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil, nil, nil) }
 
 type restoreText func(string, bool, map[string]int) string
 
 // restoreJSON walks and escapes the reply the same way for both maskers.
 // A request-local masker leaves sealed and reasoning fields as received.
-func restoreJSON(body []byte, put map[string]int, replace restoreText) []byte {
+func restoreJSON(body []byte, put map[string]int, replace restoreText, notice *chatNotice) []byte {
 	local := replace != nil
 	if !local {
 		if !heldIn(body) && !hasShapes(body) {
@@ -582,9 +582,16 @@ func restoreJSON(body []byte, put map[string]int, replace restoreText) []byte {
 	}
 	typ := typeOf(body)
 	signed := signedReplyFields(body, local)
+	choice := notice.choice(body, "message")
 	out, ok := walk(body, func(path, key, s string) string {
 		if local && (sealedText(key, s) || privateReplyField(path, key, typ, signed)) {
 			return s
+		}
+		if path == chatMessageText && choice.Exists() {
+			count := make(map[string]int)
+			text := replace(s, false, count)
+			notice.record(s, text, count, put)
+			return text
 		}
 		return replace(s, asJSON(key, typ), put)
 	})
@@ -594,7 +601,7 @@ func restoreJSON(body []byte, put map[string]int, replace restoreText) []byte {
 		}
 		return []byte(replace(string(body), false, put))
 	}
-	return out
+	return notice.append(out, choice, "message")
 }
 
 func signedReplyFields(body []byte, local bool) []string {

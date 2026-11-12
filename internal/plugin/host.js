@@ -3533,6 +3533,11 @@ const handlers = {
     privacyMemoryMiB = Math.max(privacyMemoryMiB, p.memoryMiB || 0)
     return result
   },
+  async privacyNotice(p, signal) {
+    const entry = await import(pathToFileURL(p.entry).href)
+    signal.throwIfAborted()
+    return typeof entry.renderNotice === "function" ? await entry.renderNotice(p.values) : ""
+  },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {
       calls: state.calls, failures: state.failures,
