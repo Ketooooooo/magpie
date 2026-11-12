@@ -65,9 +65,9 @@ func ProtectWithPlugin(ctx context.Context, target string, spec PrivacySpec, dir
 }
 
 // PrivacyNotice renders the plugin's optional notice for restored reply text.
-func PrivacyNotice(ctx context.Context, target string, spec PrivacySpec, values map[string]string) (string, error) {
+func PrivacyNotice(ctx context.Context, target string, spec PrivacySpec, values map[string]string, linkTarget string) (string, error) {
 	var notice string
-	err := callPrivacy(ctx, target, spec, "privacyNotice", map[string]any{"values": values}, &notice)
+	err := callPrivacy(ctx, target, spec, "privacyNotice", map[string]any{"values": values, "linkTarget": linkTarget}, &notice)
 	return notice, err
 }
 

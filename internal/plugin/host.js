@@ -3536,7 +3536,7 @@ const handlers = {
   async privacyNotice(p, signal) {
     const entry = await import(pathToFileURL(p.entry).href)
     signal.throwIfAborted()
-    return typeof entry.renderNotice === "function" ? await entry.renderNotice(p.values) : ""
+    return typeof entry.renderNotice === "function" ? await entry.renderNotice(p.values, p.linkTarget) : ""
   },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {

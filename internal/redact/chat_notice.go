@@ -77,7 +77,7 @@ func (n *chatNotice) append(data []byte, choice gjson.Result, field string) []by
 		return data
 	}
 	notice := n.render(n.values)
-	if notice == "" {
+	if notice == "" || stripReplyNotice(notice) != "" {
 		return data
 	}
 	part := gjson.GetBytes(data, "choices.0."+field)
@@ -85,7 +85,7 @@ func (n *chatNotice) append(data []byte, choice gjson.Result, field string) []by
 	if part.Index <= 0 || !part.IsObject() || json.Unmarshal([]byte(part.Raw), &object) != nil {
 		return data
 	}
-	object["content"], _ = json.Marshal(part.Get("content").String() + wrapReplyNotice(notice))
+	object["content"], _ = json.Marshal(part.Get("content").String() + notice)
 	replacement, err := json.Marshal(object)
 	if err != nil {
 		return data

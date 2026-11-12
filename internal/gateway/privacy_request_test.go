@@ -19,7 +19,6 @@ import (
 
 func TestHostedPrivacyRequestBatchAndCapture(t *testing.T) {
 	t.Setenv("MAGPIE_BUN", testenv.Bun(t))
-	t.Cleanup(plugin.Settle)
 	const first, second = "data:private-one", "private-two"
 	const firstMask, secondMask = "{{FIELD_aaaaaaaa}}", "{{FIELD_bbbbbbbb}}"
 	f := &fake{ctype: "application/json", reply: `{"fields":["` + firstMask + `","` + secondMask + `"]}`}
@@ -28,6 +27,8 @@ func TestHostedPrivacyRequestBatchAndCapture(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
+	t.Cleanup(plugin.Settle)
+	t.Cleanup(archivePending.Wait)
 	files := map[string]string{
 		"package.json": `{"name":"batch-privacy","magpie":{"privacy":{"id":"batch-privacy","name":"Batch privacy","protocol":"plugin-scan-v1","entry":"privacy.mjs"}}}`,
 		"privacy.mjs": `

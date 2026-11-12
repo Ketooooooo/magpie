@@ -7,15 +7,7 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-const (
-	replyNoticeMarker = "#magpie-privacy-notice"
-	replyNoticeStart  = "\n\n[magpie-privacy-notice-start]: " + replyNoticeMarker + "\n\n"
-	replyNoticeEnd    = "\n\n[magpie-privacy-notice-end]: " + replyNoticeMarker
-)
-
-func wrapReplyNotice(notice string) string {
-	return replyNoticeStart + strings.TrimLeft(notice, "\n") + replyNoticeEnd
-}
+const ReplyNoticeTarget = "#magpie-privacy-notice"
 
 // StripReplyNotices keeps reply presentation out of assistant history
 // before routing, even when this request uses no masker.
@@ -24,7 +16,7 @@ func StripReplyNotices(body []byte) []byte {
 	if len(jsonBody) == 0 || jsonBody[0] != '{' {
 		return body
 	}
-	if !bytes.Contains(body, []byte(replyNoticeMarker)) &&
+	if !bytes.Contains(body, []byte(ReplyNoticeTarget)) &&
 		!bytes.Contains(body, []byte("#gray-mask")) &&
 		!bytes.Contains(body, []byte(`\u`)) {
 		return body
@@ -56,25 +48,36 @@ func StripReplyNotices(body []byte) []byte {
 }
 
 func stripReplyNotice(text string) string {
-	tailTrimmed := strings.TrimRight(text, "\r\n")
-	if beforeEnd, ok := strings.CutSuffix(tailTrimmed, replyNoticeEnd); ok {
-		if start := strings.LastIndex(beforeEnd, replyNoticeStart); start >= 0 {
+	const paragraph = "\n\n"
+	trimmed := strings.TrimRight(text, "\r\n")
+	// Notices from the reference-definition preview already in history.
+	if beforeEnd, ok := strings.CutSuffix(trimmed, paragraph+"[magpie-privacy-notice-end]: "+ReplyNoticeTarget); ok {
+		if start := strings.LastIndex(beforeEnd, paragraph+"[magpie-privacy-notice-start]: "+ReplyNoticeTarget+paragraph); start >= 0 {
 			return beforeEnd[:start]
 		}
 	}
-	// Gray previews created before Magpie wrapped notices used this footer.
-	const grayHeading = "\n\n🔒 Gray masked the following values before sending them to the model.\n\n"
-	start := strings.LastIndex(tailTrimmed, grayHeading)
-	if start >= 0 {
-		tail := tailTrimmed[start+len(grayHeading):]
-		if tail != "" {
-			for line := range strings.SplitSeq(tail, "\n") {
-				if !strings.HasPrefix(line, "- [") || !strings.Contains(line, `](#gray-mask "`) || !strings.HasSuffix(line, `")`) {
-					return text
-				}
-			}
-			return text[:start]
+	listAt := strings.LastIndex(trimmed, paragraph)
+	if listAt < 0 {
+		return text
+	}
+	headingAt := strings.LastIndex(trimmed[:listAt], paragraph)
+	if headingAt < 0 {
+		return text
+	}
+	heading := trimmed[headingAt+len(paragraph) : listAt]
+	if heading == "" || strings.ContainsRune(heading, '\n') {
+		return text
+	}
+	list := trimmed[listAt+len(paragraph):]
+	target := ReplyNoticeTarget
+	// Existing Gray conversations use the older link target.
+	if heading == "🔒 Gray masked the following values before sending them to the model." && !strings.Contains(list, ReplyNoticeTarget) {
+		target = "#gray-mask"
+	}
+	for line := range strings.SplitSeq(list, "\n") {
+		if !strings.HasPrefix(line, "- [") || !strings.Contains(line, "]("+target+` "`) || !strings.HasSuffix(line, `")`) {
+			return text
 		}
 	}
-	return text
+	return text[:headingAt]
 }

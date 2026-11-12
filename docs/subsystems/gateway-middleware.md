@@ -98,14 +98,16 @@ Masking runs at the gateway's normal request boundary for both built-in and
 installed engines. Provider middleware and model system prompts added later
 are sent as configured.
 
-An engine can declare `replyNotice: true` and export `renderNotice(values)`,
+An engine can declare `replyNotice: true` and export `renderNotice(values, linkTarget)`,
 where `values` maps masks to originals restored in visible assistant text.
 Magpie appends the returned text at the end of a successful, single-choice
 Chat Completions reply, including a streaming reply. JSON, structured output,
 tool calls and reasoning fields do not get a notice. If rendering fails, the
-restored reply is delivered without it. Magpie marks the notice with Markdown
-link reference definitions and removes it from assistant history at ingress.
-This also works when the next request uses another engine or skips masking.
+restored reply is delivered without it. The notice starts with a blank line,
+a single heading line, and another blank line, followed by list entries in
+the form `- [value](linkTarget "mask")`. Each entry uses the supplied fragment
+as its link destination. Magpie uses it to remove the notice from assistant
+history at ingress, including after an engine switch or a masking opt-out.
 
 Magpie retains its own custom rules, exceptions, category actions and
 alternate unmasked route when switching engines. These settings apply to its

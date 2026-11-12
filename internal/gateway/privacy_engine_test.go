@@ -41,8 +41,8 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 	code := `
 import { existsSync } from "node:fs";
 const heading = "\n\nMasked values\n\n";
-export function renderNotice(values) {
-  return heading + Object.entries(values).map(([token, value]) => '- [' + value + '](#mask "' + token + '")').join("\n");
+export function renderNotice(values, target) {
+  return heading + Object.entries(values).map(([token, value]) => '- [' + value + '](' + target + ' "' + token + '")').join("\n");
 }
 export function protect(fragments) {
   if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
@@ -82,8 +82,7 @@ export function protect(fragments) {
 		t.Fatalf("hosted engine did not mask and restore: %d %s", reply.Code, reply.Body)
 	}
 	content := gjson.Get(reply.Body.String(), "choices.0.message.content").String()
-	notice := "\n\n[magpie-privacy-notice-start]: #magpie-privacy-notice\n\nMasked values\n\n- [" + value +
-		`](#mask "` + token + `")` + "\n\n[magpie-privacy-notice-end]: #magpie-privacy-notice"
+	notice := "\n\nMasked values\n\n- [" + value + `](#magpie-privacy-notice "` + token + `")`
 	if content != value+notice {
 		t.Fatalf("reply should restore the body and add the plugin notice, got %q", content)
 	}
@@ -149,7 +148,7 @@ data: [DONE]
 	stream := strings.Replace(body, `"model":`, `"stream":true,"model":`, 1)
 	if code, reply := post(t, "/v1/chat/completions", stream); code != 200 ||
 		strings.Count(reply, token) != 1 || strings.Count(reply, value) != 2 ||
-		!strings.Contains(reply, "#mask") || strings.Index(reply, "#mask") > strings.Index(reply, "[DONE]") {
+		!strings.Contains(reply, "#magpie-privacy-notice") || strings.Index(reply, "#magpie-privacy-notice") > strings.Index(reply, "[DONE]") {
 		t.Fatalf("Gray engine did not restore a split stream token and add its notice: %d %s", code, reply)
 	}
 	f.ctype = "application/json"
@@ -163,7 +162,7 @@ data: [DONE]
 		if code, _ := post(t, "/v1/chat/completions", string(raw)); code != 200 {
 			t.Fatalf("assistant history failed: %d", code)
 		}
-		if strings.Contains(string(f.got), "#mask") || strings.Contains(string(f.got), value) ||
+		if strings.Contains(string(f.got), "#magpie-privacy-notice") || strings.Contains(string(f.got), value) ||
 			!strings.Contains(string(f.got), strings.ReplaceAll(original, value, token)) {
 			t.Fatalf("assistant history did not lose its notice and retain its protected body: %s", f.got)
 		}
@@ -219,8 +218,9 @@ data: [DONE]
 func TestPrivacyNoticeRemovedBeforeEngineSelection(t *testing.T) {
 	const legacy = "\n\n🔒 Gray masked the following values before sending them to the model.\n\n" +
 		`- [preview@example.org](#gray-mask "{{EMAIL_abcdefgh}}")`
-	const wrapped = "\n\n[magpie-privacy-notice-start]: #magpie-privacy-notice\n\nTest preview\n\n" +
-		"[magpie-privacy-notice-end]: #magpie-privacy-notice"
+	const wrapped = "\n\nTest preview\n\n" + `- [example](#magpie-privacy-notice "{{EMAIL_abcdefgh}}")`
+	const references = "\n\n[magpie-privacy-notice-start]: #magpie-privacy-notice" + legacy +
+		"\n\n[magpie-privacy-notice-end]: #magpie-privacy-notice"
 	for _, engine := range []string{privacyengine.Builtin, privacyengine.Disabled} {
 		t.Run(engine, func(t *testing.T) {
 			f := &fake{ctype: "application/json", reply: `{"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`}
@@ -231,15 +231,17 @@ func TestPrivacyNoticeRemovedBeforeEngineSelection(t *testing.T) {
 			body, _ := json.Marshal(map[string]any{"model": "fake/m1", "messages": []map[string]string{
 				{"role": "assistant", "content": "First reply." + legacy},
 				{"role": "assistant", "content": "Second reply." + wrapped},
+				{"role": "assistant", "content": "Third reply." + references},
 				{"role": "user", "content": "Continue." + wrapped},
 			}})
 			if code, _ := post(t, "/v1/chat/completions", string(body)); code != http.StatusOK {
 				t.Fatalf("request returned %d", code)
 			}
 			messages := gjson.GetBytes(f.got, "messages").Array()
-			if len(messages) != 3 || messages[0].Get("content").String() != "First reply." ||
+			if len(messages) != 4 || messages[0].Get("content").String() != "First reply." ||
 				messages[1].Get("content").String() != "Second reply." ||
-				messages[2].Get("content").String() != "Continue."+wrapped {
+				messages[2].Get("content").String() != "Third reply." ||
+				messages[3].Get("content").String() != "Continue."+wrapped {
 				t.Fatalf("notice cleanup should apply only to assistant history, got %s", f.got)
 			}
 		})
