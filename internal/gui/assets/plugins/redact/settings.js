@@ -44,7 +44,7 @@ function redactRouteRow(s) {
 // (unmaskedProviders), each opening its editor, where the switch is under
 // Advanced; none, it says where the switch is (CrazyMouse_TT on X wanted
 // masking off for their own model and found no way to)
-function unmaskedRow(s) {
+function unmaskedRow(s, container = $("#redactList")) {
   const ps = s.unmaskedProviders || [];
   const r = el("div", "row pref"), who = el("div", "who"), val = el("div", "val unmasked-list");
   who.append(el("div", "name", t("Sent unmasked")), el("div", "sub", ps.length
@@ -59,8 +59,8 @@ function unmaskedRow(s) {
   }
   r.append(who, val);
   r.id = "unmaskedRow";
-  const after = $("#redactRouteRow") || $("#redactWordsWholeRow");
-  if (after) after.after(r); else $("#redactList").append(r);
+  const after = container.querySelector("#redactRouteRow") || container.querySelector("#redactWordsWholeRow");
+  if (after) after.after(r); else container.append(r);
 }
 // wordList: Masked words and Never mask as a list, one row a value
 // (noahhrreion on Discord: many words were hard to keep in one small
@@ -248,8 +248,10 @@ function redactWordsHidden(r) {
   r.querySelector(".val").append(eye);
 }
 let editingPrivacyEngine = "";
+let activatePrivacyEngine = false;
 function openPrivacyEngineSettings(event, id) {
   editingPrivacyEngine = id;
+  activatePrivacyEngine = false;
   return openSettingsAt(event, "privacy", `[data-privacy-engine="${CSS.escape(id)}"]`);
 }
 
@@ -257,50 +259,65 @@ function privacyEngineRow(s) {
   const current = s.privacyEngine || "magpie";
   const engines = s.privacyEngines || [];
   const selected = engines.find((engine) => engine.id === current);
-  const ready = engines.filter((engine) => engine.configured && !engine.off && !engine.conflict);
-  const choices = ready.map(({id, name}) => [id, name]);
-  const controls = segs(choices, current, (id) => {
-    if (id === current) return;
-    writingPrefs(api("privacy-engine", { id }))
-      .then((ns) => { prefs = ns; renderSettings(); })
-      .catch((err) => { renderSettings(); settingsErr(err); });
-  });
+  const label = (engine) => engine.builtin ? t("Magpie (built-in)") : engine.name;
+  const options = [{v: "none", name: "None", note: "Turn off default gateway masking."}];
+  for (const engine of engines.filter((engine) => !engine.off && !engine.conflict)) {
+    options.push({v: engine.id, name: label(engine), literalName: true, note: engine.configured ? "" : "Connection required"});
+  }
   const row = el("div", "row pref");
   const who = el("div", "who"), val = el("div", "val");
   let sub = t("Choose the engine that protects new gateway requests.");
-  if (!selected || selected.off || selected.conflict || !selected.configured) {
+  if (current === "none") {
+    sub = t("Gateway masking is off by default. Keys that require masking still use Magpie.");
+  } else if (!selected || selected.off || selected.conflict || !selected.configured) {
     sub = t("The selected engine is unavailable. Configure it or choose another engine.");
   }
   who.append(el("div", "name", t("Privacy engine")), el("div", "sub", sub));
-  val.append(controls);
+  const menu = el("button", "rt-cond on", current === "none" ? t("None") : selected ? label(selected) : current);
+  menu.type = "button";
+  menu.setAttribute("aria-label", t("Privacy engine"));
+  menu.setAttribute("aria-haspopup", "menu");
+  menu.setAttribute("aria-expanded", "false");
+  menu.append(svg(CHEV, 12, 1.6));
+  menu.onclick = () => {
+    if (menu.getAttribute("aria-expanded") === "true") { closeProtoMenu(); return; }
+    openProtoMenu(menu, options, current, (id) => {
+      const next = engines.find((engine) => engine.id === id);
+      if (next && !next.configured) {
+        editingPrivacyEngine = id;
+        activatePrivacyEngine = true;
+        renderSettings();
+        $("#privacyEngineList input[type=url]")?.focus(NO_SCROLL);
+        return;
+      }
+      if (id === current) return;
+      menu.disabled = true;
+      editingPrivacyEngine = "";
+      activatePrivacyEngine = false;
+      prefWrite(api("privacy-engine", { id }));
+    }, "Privacy engine", "", "right");
+  };
+  val.append(menu);
+  if (selected && !selected.builtin && !selected.off && !selected.conflict && editingPrivacyEngine !== current) {
+    const edit = el("button", "text", t("Configure"));
+    edit.type = "button";
+    edit.onclick = () => { editingPrivacyEngine = current; activatePrivacyEngine = false; renderSettings(); };
+    val.append(edit);
+  }
   row.append(who, val);
   row.id = "privacyEngineRow";
-  const box = $("#redactList");
-  box.prepend(row);
-  let last = row;
-  for (const engine of engines.filter((engine) => !engine.builtin)) {
-    const entry = privacyConnectionRow(engine);
-    last.after(entry);
-    last = entry;
-  }
+  const box = $("#privacyEngineList");
+  box.replaceChildren(row);
+  const editing = engines.find((engine) => engine.id === editingPrivacyEngine);
+  if (editing && !editing.off && !editing.conflict) box.append(privacyConnectionRow(editing));
 }
 
 function privacyConnectionRow(engine) {
   const row = el("div", "row pref privacy-engine-connection");
   row.dataset.privacyEngine = engine.id;
   const who = el("div", "who"), controls = el("div", "val");
-  let detail = engine.configured ? engine.endpoint : t("Connection required");
-  if (engine.off || engine.conflict) detail = t("Unavailable");
-  who.append(el("div", "name", engine.name), el("div", "sub", detail));
+  who.append(el("div", "name", engine.name));
   row.append(who, controls);
-  if (engine.off || engine.conflict) return row;
-  if (engine.configured && editingPrivacyEngine !== engine.id) {
-    const edit = el("button", "", t("Configure"));
-    edit.type = "button";
-    edit.onclick = () => { editingPrivacyEngine = engine.id; renderSettings(); };
-    controls.append(edit);
-    return row;
-  }
   const form = el("form", "privacy-engine-form");
   const endpoint = el("input", "input"), token = el("input", "input");
   endpoint.type = "url";
@@ -313,7 +330,7 @@ function privacyConnectionRow(engine) {
   token.placeholder = engine.configured ? t("Leave blank to keep the current token") : t("Service token");
   token.required = !engine.configured;
   token.setAttribute("aria-label", t("Service token"));
-  const save = el("button", "", t("Save connection"));
+  const save = el("button", "", t(activatePrivacyEngine ? "Save and select" : "Save connection"));
   save.type = "submit";
   const error = el("div", "warn");
   error.setAttribute("role", "status");
@@ -324,14 +341,21 @@ function privacyConnectionRow(engine) {
     try {
       prefs = await writingPrefs(api("privacy-engine/configure", {id: engine.id, endpoint: endpoint.value, token: token.value}));
       token.value = "";
+      token.required = false;
+      token.placeholder = t("Leave blank to keep the current token");
+      if (activatePrivacyEngine) prefs = await writingPrefs(api("privacy-engine", {id: engine.id}));
       editingPrivacyEngine = "";
+      activatePrivacyEngine = false;
       renderSettings();
     } catch (err) {
       error.textContent = err.message;
       save.disabled = false;
     }
   };
-  form.append(endpoint, token, save, error);
+  const cancel = el("button", "text", t("Cancel"));
+  cancel.type = "button";
+  cancel.onclick = () => { editingPrivacyEngine = ""; activatePrivacyEngine = false; renderSettings(); };
+  form.append(endpoint, token, save, cancel, error);
   controls.append(form);
   who.append(el("div", "sub", t("Connect only to a service you trust with unmasked requests.")));
   return row;
@@ -352,15 +376,13 @@ let displayedPrivacyEngine;
     const f = wordFocusOf();
     wordsRedrawing = true;
     try { draw(s, keep); } finally { wordsRedrawing = false; }
-    if (engine !== "magpie") {
-      for (const id of ["redactList", "findList", "maskActList"]) $("#" + id)?.replaceChildren();
-      privacyEngineRow(s);
-      unmaskedRow(s);
-      if (changedEngine && maskTry.text.trim()) maskTryRun($(".mask-try-out"));
-      return;
-    }
+    for (const item of $$("[data-native-privacy]")) item.hidden = engine !== "magpie";
     privacyEngineRow(s);
     if (changedEngine && maskTry.text.trim()) maskTryRun($(".mask-try-out"));
+    if (engine !== "magpie") {
+      if (engine !== "none" && s.unmaskedProviders?.length) unmaskedRow(s, $("#privacyEngineList"));
+      return;
+    }
 
     const wl = wordList("words", s.redactWords || [], t("names, codenames, hosts"), t("Masked words"), (redactWords) => savePrefs({ ...keep, redactWords }), () => prefs?.redactWords);
     const words = wordRow(t("Masked words"), t("Your own words to keep from vendors, one on each row"), wl, ...wl.tools);

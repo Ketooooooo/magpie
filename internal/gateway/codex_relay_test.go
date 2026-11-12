@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -101,12 +102,14 @@ func TestCodexRelayRefusesWhatNeedsMagpie(t *testing.T) {
 		hdr        map[string]string
 		mask       bool
 		want       string
+		engine     string
 	}{
-		{"magpie model", `{"model":"openrouter/kimi-k2","input":"hi"}`, auth, false, "one of magpie's models"},
-		{"magpie account", `{"model":"gpt-5.5","input":"hi"}`, map[string]string{"Authorization": "Bearer t", AccountHeader: "a@b.c"}, false, "magpie's Codex accounts"},
-		{"masking", `{"model":"gpt-5.5","input":"DB_PASSWORD=hunter2"}`, auth, true, "not sent unmasked"},
+		{"magpie model", `{"model":"openrouter/kimi-k2","input":"hi"}`, auth, false, "one of magpie's models", ""},
+		{"magpie account", `{"model":"gpt-5.5","input":"hi"}`, map[string]string{"Authorization": "Bearer t", AccountHeader: "a@b.c"}, false, "magpie's Codex accounts", ""},
+		{"masking", `{"model":"gpt-5.5","input":"DB_PASSWORD=hunter2"}`, auth, true, "not sent unmasked", ""},
+		{"selected plugin", `{"model":"gpt-5.5","input":"hi"}`, auth, false, "not sent unmasked", "test-detector"},
 	} {
-		if err := settings.Save(settings.Settings{Redact: c.mask}); err != nil {
+		if err := settings.Save(settings.Settings{Redact: c.mask, PrivacyEngine: c.engine}); err != nil {
 			t.Fatal(err)
 		}
 		rec := relayDo(h, "POST", "127.0.0.1:3425", CodexPath+"/responses", c.body, c.hdr)
@@ -120,6 +123,13 @@ func TestCodexRelayRefusesWhatNeedsMagpie(t *testing.T) {
 	}
 	if got := up.sent(); len(got) != 0 {
 		t.Fatalf("OpenAI was sent %+v", got)
+	}
+	if err := settings.Save(settings.Settings{Redact: true, PrivacyEngine: privacyengine.Disabled}); err != nil {
+		t.Fatal(err)
+	}
+	rec := relayDo(h, "POST", "127.0.0.1:3425", CodexPath+"/responses", `{"model":"gpt-5.5","input":"hi"}`, auth)
+	if rec.Code != http.StatusOK || len(up.sent()) != 1 {
+		t.Fatalf("None did not allow the ordinary Codex relay request: %d", rec.Code)
 	}
 }
 

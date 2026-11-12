@@ -67,7 +67,8 @@ func pinPrivacySettings(r *http.Request) (*http.Request, error) {
 // masking record captures a protected preview for a companion engine.
 func nativePrivacyCapture(ctx context.Context) bool {
 	st, err := requestPrivacySettings(ctx)
-	return err == nil && privacyengine.ID(st) == privacyengine.Builtin
+	id := privacyengine.ID(st)
+	return err == nil && (id == privacyengine.Builtin || id == privacyengine.Disabled)
 }
 
 // redacted masks a request's secrets, as the settings say, before it goes
@@ -108,7 +109,7 @@ func redactedHits(ctx context.Context, w http.ResponseWriter, body []byte) (http
 	})
 	o.h.took = time.Since(began)
 	st, _ := requestPrivacySettings(ctx)
-	o.h.engine = privacyengine.ID(st)
+	o.h.engine = privacyengine.RequestID(st, access.Caller(ctx).Redact == access.RedactOn)
 	o.h.masker = m
 	if named, ok := m.(interface{ PrivacyName() string }); ok {
 		o.h.engineName = named.PrivacyName()
@@ -205,7 +206,7 @@ func maskTextHits(ctx context.Context, s string) (gwmw.Masker, string, maskHits,
 	})
 	o.h.took = time.Since(began)
 	st, _ := requestPrivacySettings(ctx)
-	o.h.engine = privacyengine.ID(st)
+	o.h.engine = privacyengine.RequestID(st, access.Caller(ctx).Redact == access.RedactOn)
 	o.h.masker = m
 	if named, ok := m.(interface{ PrivacyName() string }); ok {
 		o.h.engineName = named.PrivacyName()

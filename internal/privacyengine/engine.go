@@ -12,7 +12,10 @@ import (
 	"github.com/yetone/magpie/internal/settings"
 )
 
-const Builtin = "magpie"
+const (
+	Builtin  = "magpie"
+	Disabled = "none"
+)
 
 // Info is safe to return to the settings page. Connection credentials stay local.
 type Info struct {
@@ -81,6 +84,15 @@ func ID(st settings.Settings) string {
 	return st.PrivacyEngine
 }
 
+// RequestID preserves a gateway key's explicit requirement to mask.
+func RequestID(st settings.Settings, forced bool) string {
+	id := ID(st)
+	if id == Disabled && forced {
+		return Builtin
+	}
+	return id
+}
+
 // The default engine is registered through the same registry. It can be
 // resolved without reading installed packages on Magpie's normal hot path.
 func lookup(id string) (engine, error) {
@@ -101,6 +113,9 @@ func lookup(id string) (engine, error) {
 }
 
 func Select(ctx context.Context, id string) error {
+	if id == Disabled {
+		return settings.SetPrivacyEngine(id, nil)
+	}
 	e, err := lookup(id)
 	if err != nil {
 		return err
@@ -115,11 +130,22 @@ func Select(ctx context.Context, id string) error {
 
 func Wanted(st settings.Settings) bool {
 	// A selected external engine remains required if its plugin is removed.
-	return ID(st) != Builtin || nativeEngine().wanted(st)
+	switch ID(st) {
+	case Disabled:
+		return false
+	case Builtin:
+		return nativeEngine().wanted(st)
+	default:
+		return true
+	}
 }
 
 func Begin(ctx context.Context, st settings.Settings, forced bool) (context.Context, gwmw.Masker, error) {
-	e, err := lookup(ID(st))
+	id := RequestID(st, forced)
+	if id == Disabled {
+		return ctx, nil, nil
+	}
+	e, err := lookup(id)
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -132,7 +158,11 @@ func Begin(ctx context.Context, st settings.Settings, forced bool) (context.Cont
 }
 
 func Preview(ctx context.Context, st settings.Settings, input string) (string, []gwmw.Hit, bool, error) {
-	e, err := lookup(ID(st))
+	id := ID(st)
+	if id == Disabled {
+		return input, nil, true, nil
+	}
+	e, err := lookup(id)
 	if err != nil {
 		return "", nil, false, err
 	}

@@ -68,7 +68,10 @@ function maskLoad(force) {
 const maskSettings = () => prefs || state?.settings || {};
 // on as the masker is (masking.Wanted): your own words mask with neither
 // switch on
-const maskOn = () => { const s = maskSettings(); return !!((s.privacyEngine && s.privacyEngine !== "magpie") || s.redact || s.redactPersonal || s.redactWords?.length); };
+const maskOn = () => {
+  const s = maskSettings(), engine = s.privacyEngine || "magpie";
+  return engine !== "none" && (engine !== "magpie" || !!(s.redact || s.redactPersonal || s.redactWords?.length));
+};
 
 function maskPageOpen() {
   if (!providers && !maskProvAsked) {
@@ -138,7 +141,7 @@ function drawMaskCard() {
     if (!maskSettings().redactWords?.length) {
       const set = el("button", "link", t("Settings") + " › " + $("#setTab-privacy").textContent);
       set.type = "button";
-      set.onclick = (e) => openSettingsAt(e, "privacy", "#redactList .row");
+      set.onclick = (e) => openSettingsAt(e, "privacy", "#privacyEngineRow");
       head.append(set);
     }
     head.append(maskOffButton());
@@ -216,6 +219,13 @@ function maskNone() {
 // button opens it there, and says so, rather than leave the page
 // saying off while words still mask
 function maskOffButton() {
+  const engine = maskSettings().privacyEngine;
+  if (engine && engine !== "magpie") {
+    const button = el("button", "text", t("Turn off in Settings"));
+    button.type = "button";
+    button.onclick = (event) => openSettingsAt(event, "privacy", "#privacyEngineRow");
+    return button;
+  }
   const words = maskSettings().redactWords?.length;
   const b = el("button", "text", t(words ? "Turn off in Settings" : "Turn off masking"));
   b.type = "button";
@@ -239,6 +249,7 @@ function maskOffButton() {
 }
 let maskWasPersonal = false;
 function maskTurnOn(e) {
+  if (maskSettings().privacyEngine === "none") return openSettingsAt(e, "privacy", "#privacyEngineRow");
   const b = e.currentTarget;
   b.disabled = true;
   (prefs ? Promise.resolve() : loadSettings())

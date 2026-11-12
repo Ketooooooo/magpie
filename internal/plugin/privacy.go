@@ -45,7 +45,7 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 		return nil, false
 	}
 	s := pkg.Magpie.Privacy
-	if s == nil || !actionID.MatchString(s.ID) || s.ID == "magpie" || s.Protocol != "http-scan-v1" {
+	if s == nil || !actionID.MatchString(s.ID) || (s.ID == "magpie" || s.ID == "none") || s.Protocol != "http-scan-v1" {
 		return nil, false
 	}
 	s.Name = strings.TrimSpace(s.Name)

@@ -2,6 +2,10 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Magpie (built-in)": "Magpie（内置）",
+    "Turn off default gateway masking.": "关闭默认网关脱敏。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "网关默认不脱敏。要求脱敏的网关密钥仍使用 Magpie。",
+    "Save and select": "保存并选用",
     "The selected engine is unavailable. Configure it or choose another engine.": "所选引擎不可用，请配置该引擎或选择其他引擎。",
     "Connection required": "需要配置连接",
     "Local service address": "本地服务地址",
@@ -123,6 +127,10 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新消息起按原样发送；之前的消息仍脱敏，缓存不受影响",
   },
   "zh-TW": {
+    "Magpie (built-in)": "Magpie（內建）",
+    "Turn off default gateway masking.": "關閉預設閘道遮罩。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "閘道預設不遮罩。要求遮罩的閘道金鑰仍使用 Magpie。",
+    "Save and select": "儲存並選用",
     "The selected engine is unavailable. Configure it or choose another engine.": "所選引擎無法使用，請設定該引擎或選擇其他引擎。",
     "Connection required": "需要設定連線",
     "Local service address": "本機服務位址",
@@ -244,6 +252,10 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新訊息起照原樣送出；之前的訊息仍脫敏，快取不受影響",
   },
   ja: {
+    "Magpie (built-in)": "Magpie（内蔵）",
+    "Turn off default gateway masking.": "ゲートウェイの既定のマスク処理を無効にします。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "既定ではマスク処理を行いません。必須設定のキーでは引き続き Magpie を使用します。",
+    "Save and select": "保存して選択",
     "The selected engine is unavailable. Configure it or choose another engine.": "選択したエンジンを利用できません。設定するか、別のエンジンを選んでください。",
     "Connection required": "接続の設定が必要",
     "Local service address": "ローカルサービスのアドレス",
@@ -365,6 +377,10 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新しいメッセージからそのまま送信します。以前のメッセージはマスクしたままなので、キャッシュは保たれます",
   },
   de: {
+    "Magpie (built-in)": "Magpie (eingebaut)",
+    "Turn off default gateway masking.": "Standardmaskierung des Gateways ausschalten.",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "Das Gateway maskiert standardmäßig nicht. Schlüssel mit Maskierungspflicht verwenden weiterhin Magpie.",
+    "Save and select": "Speichern und auswählen",
     "The selected engine is unavailable. Configure it or choose another engine.": "Die ausgewählte Engine ist nicht verfügbar. Konfiguriere sie oder wähle eine andere.",
     "Connection required": "Verbindung erforderlich",
     "Local service address": "Adresse des lokalen Dienstes",

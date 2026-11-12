@@ -55,6 +55,7 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 
 	f := &fake{ctype: "application/json", reply: `{"id":"chatcmpl-1","object":"chat.completion","model":"m1","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1}}`}
 	setup(t, provider.Chat, f)
+	ordinaryReply := f.reply
 	oldDir := maskrec.Dir
 	path := filepath.Join(t.TempDir(), "masking")
 	maskrec.Dir = func() string { return path }
@@ -124,10 +125,27 @@ data: [DONE]
 	if len(history) < 2 || history[0].EngineName != "Local detector" {
 		t.Fatalf("disabling a plugin changed its history: %+v", history)
 	}
+	if err := privacyengine.Select(t.Context(), privacyengine.Disabled); err != nil {
+		t.Fatal(err)
+	}
+	f.ctype, f.reply = "application/json", ordinaryReply
+	if code, _ := post(t, "/v1/chat/completions", body); code != http.StatusOK || !strings.Contains(string(f.got), value) {
+		t.Fatalf("None should send an ordinary request as written, got %d", code)
+	}
+	if settings.Shared().PrivacyEngine != privacyengine.Disabled {
+		t.Fatal("None was not persisted")
+	}
+	afterNone, _ := maskrec.List(0, 5, maskrec.Filter{})
+	if len(afterNone) != len(history) || afterNone[0].Key != history[0].Key {
+		t.Fatal("selecting None changed the masking history")
+	}
 	if err := privacyengine.Select(t.Context(), privacyengine.Builtin); err != nil {
 		t.Fatal(err)
 	}
 	if !settings.Shared().RedactPersonal {
 		t.Fatal("switching back lost the Magpie policy")
+	}
+	if code, _ := post(t, "/v1/chat/completions", body); code != http.StatusOK || strings.Contains(string(f.got), value) {
+		t.Fatalf("returning to Magpie did not resume masking, got %d", code)
 	}
 }

@@ -72,12 +72,16 @@ bun test packages/think-tags packages/model-map packages/param-override packages
 
 ## Privacy engines in the gateway
 
-Settings → Privacy selects a registered engine for new gateway requests.
+Settings → Privacy offers a single selector for None, the built-in engine,
+and installed engines. None disables default masking for new requests.
+Gateway keys that require masking still use the built-in engine in this
+mode. Switching keeps engine configuration and masking history.
 The Magpie engine uses the existing built-in masking settings. Enabled
 installed plugins can declare a companion engine under `magpie.privacy`
 in package.json. Install [the Gray Privacy package](../../examples/plugins/gray-privacy)
 through Plugins, open Configure and enter the local Gray host address and
-token. The address must be numeric loopback HTTP. The token stays in a
+token. Picking an unconfigured engine in the selector also opens its
+connection form. The address must be numeric loopback HTTP. The token stays in a
 local private file, separate from the plugin's options. Saving tests the
 connection, and selecting the engine applies it to subsequent requests.
 Magpie keeps its own settings when switching away. Custom masking rules,
