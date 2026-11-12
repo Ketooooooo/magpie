@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/maskrec"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -49,7 +49,7 @@ func shownRecord(r maskrec.Record, t gwmw.Teller) maskedRecord {
 	out := maskedRecord{Record: r, Key: r.Key}
 	for _, v := range r.Values {
 		mv := maskedValue{Value: v}
-		if t != nil {
+		if t != nil && (r.Engine == "" || r.Engine == privacyengine.Builtin) {
 			_, mv.Known = t.Value(v.Placeholder)
 		}
 		out.Values = append(out.Values, mv)
@@ -83,6 +83,21 @@ func shownRecord(r maskrec.Record, t gwmw.Teller) maskedRecord {
 //     on (yew_fence on Discord). The masker is asked for the value, so
 //     only one it masked is added; 404 once it no longer knows it.
 func maskingRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/privacy-engine", func(rw http.ResponseWriter, r *http.Request) {
+		var in struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(io.LimitReader(r.Body, 1024)).Decode(&in); err != nil {
+			fail(rw, err)
+			return
+		}
+		if err := privacyengine.Select(r.Context(), in.ID); err != nil {
+			fail(rw, err)
+			return
+		}
+		writeJSON(rw, settingsState())
+	})
+
 	mux.HandleFunc("POST /api/masking/allow", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			P string `json:"p"`
@@ -127,7 +142,16 @@ func maskingRoutes(mux *http.ServeMux) {
 		if len(in.Text) > previewMax {
 			in.Text = strings.ToValidUTF8(in.Text[:previewMax], "")
 		}
-		text, hits, off := masking.Preview(in.Text)
+		st, err := settings.SharedChecked()
+		if err != nil {
+			fail(rw, err)
+			return
+		}
+		text, hits, off, err := privacyengine.Preview(r.Context(), st, in.Text)
+		if err != nil {
+			http.Error(rw, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
 		type hit struct {
 			Kind        string `json:"kind"`
 			By          string `json:"by"`

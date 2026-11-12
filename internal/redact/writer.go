@@ -22,6 +22,7 @@ type Writer struct {
 	buf     bytes.Buffer
 	pending *held
 	done    bool
+	replace func(string, bool, map[string]int) string
 	put     map[string]int // placeholders put back, each place counted
 }
 
@@ -42,6 +43,36 @@ type held struct {
 
 // NewWriter wraps w; Finish must be called when the handler is done.
 func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w} }
+
+// NewRestoringWriter frames replies for a request-bound engine.
+func NewRestoringWriter(w http.ResponseWriter, replace func(string, bool, map[string]int) string) *Writer {
+	return &Writer{w: w, replace: replace}
+}
+
+func (rw *Writer) restore(text string, escaped bool, put map[string]int) string {
+	if rw.replace != nil {
+		return rw.replace(text, escaped, put)
+	}
+	return restore(text, escaped, put)
+}
+
+func (rw *Writer) restoreBody(body []byte) []byte {
+	if rw.replace == nil {
+		return restoreJSON(body, rw.count())
+	}
+	typ := typeOf(body)
+	signed, _, _ := scan(body)
+	out, ok := walk(body, func(path, key, text string) string {
+		if under(path, signed) || sealedText(key, text) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning") {
+			return text
+		}
+		return rw.restore(text, asJSON(key, typ), rw.count())
+	})
+	if !ok {
+		return body
+	}
+	return out
+}
 
 func (rw *Writer) Header() http.Header { return rw.w.Header() }
 
@@ -187,14 +218,14 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count()))
+		rw.w.Write(rw.restoreBody(rw.buf.Bytes()))
 	case stream:
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
 			rw.pending = nil
 		}
 		if rw.buf.Len() > 0 {
-			rw.w.Write([]byte(restore(rw.buf.String(), false, rw.count())))
+			rw.w.Write([]byte(rw.restore(rw.buf.String(), false, rw.count())))
 		}
 	}
 	rw.Flush()
@@ -211,7 +242,7 @@ func (rw *Writer) Finish() {
 // first letters took the hold from the delta beside it, and the next
 // event's half of that placeholder went out as it came.
 func (rw *Writer) event(ev []byte) error {
-	if rw.pending == nil && !holding() {
+	if rw.pending == nil && rw.replace == nil && !holding() {
 		_, err := rw.w.Write(ev) // nothing masked to put back
 		return err
 	}
@@ -220,7 +251,7 @@ func (rw *Writer) event(ev []byte) error {
 		if err := rw.release(); err != nil {
 			return err
 		}
-		_, err := rw.w.Write([]byte(restore(string(ev), false, rw.count())))
+		_, err := rw.w.Write([]byte(rw.restore(string(ev), false, rw.count())))
 		return err
 	}
 	if rw.pending != nil && waiting(name, data) {
@@ -228,7 +259,7 @@ func (rw *Writer) event(ev []byte) error {
 		// piece held: released for it, the held piece went out with the
 		// start of its placeholder as it was, the next piece with the
 		// rest, and neither was a placeholder to put back (#5287)
-		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count()), post))
+		_, err := rw.w.Write(rebuild(pre, rw.restoreBody(data), post))
 		return err
 	}
 	ctx := name + "|" + eventCtx(data)
@@ -249,12 +280,17 @@ func (rw *Writer) event(ev []byte) error {
 	if typ == "" {
 		typ = name
 	}
+	var signed []string
+	if rw.replace != nil {
+		signed, _, _ = scan(data)
+	}
 	var tails, cuts map[string]string
 	restored, _ := walk(data, func(path, key, s string) string {
 		if c, ok := carry[path]; ok {
 			s = c + s
 		}
-		if sealedText(key, s) {
+		if sealedText(key, s) || rw.replace != nil &&
+			(under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning")) {
 			return s
 		}
 		// the tail is looked for before anything is put back, so a
@@ -266,12 +302,12 @@ func (rw *Writer) event(ev []byte) error {
 					tails, cuts = map[string]string{}, map[string]string{}
 				}
 				tails[path] = s[len(s)-n:]
-				cuts[path] = Restore(s[:len(s)-n], asJSON(key, typ))
+				cuts[path] = rw.restore(s[:len(s)-n], asJSON(key, typ), nil)
 			}
 		}
 		// counted here only: cut is s again without its tail, and
 		// whichever of the two goes out, the places are these
-		return restore(s, asJSON(key, typ), rw.count())
+		return rw.restore(s, asJSON(key, typ), rw.count())
 	})
 	full := rebuild(pre, restored, post)
 	if tails == nil {

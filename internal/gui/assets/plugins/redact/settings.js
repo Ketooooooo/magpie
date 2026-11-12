@@ -247,12 +247,50 @@ function redactWordsHidden(r) {
   set();
   r.querySelector(".val").append(eye);
 }
+function privacyEngineRow(s) {
+  const current = s.privacyEngine || "magpie";
+  const choices = [["magpie", "Magpie"], ["gray", "Gray Privacy"]];
+  const controls = segs(choices, current, (id) => {
+    if (id === current) return;
+    prefWrite(api("privacy-engine", { id }));
+  });
+  const row = el("div", "row pref");
+  const who = el("div", "who"), val = el("div", "val");
+  const sub = current === "gray"
+    ? t("Gray uses its published rules. Magpie settings are kept for when you switch back.")
+    : t("Choose the engine that protects new gateway requests.");
+  who.append(el("div", "name", t("Privacy engine")), el("div", "sub", sub));
+  val.append(controls);
+  row.append(who, val);
+  row.id = "privacyEngineRow";
+  $("#redactList").prepend(row);
+}
+
+let displayedPrivacyEngine;
 {
   const draw = renderRedact;
   renderRedact = function (s, keep) {
+    const engine = s.privacyEngine || "magpie";
+    const changedEngine = displayedPrivacyEngine && displayedPrivacyEngine !== engine;
+    if (changedEngine) {
+      clearTimeout(maskTry.timer);
+      maskTry.seq++;
+      maskTry.res = null;
+    }
+    displayedPrivacyEngine = engine;
     const f = wordFocusOf();
     wordsRedrawing = true;
     try { draw(s, keep); } finally { wordsRedrawing = false; }
+    if (engine === "gray") {
+      for (const id of ["redactList", "findList", "maskActList"]) $("#" + id)?.replaceChildren();
+      privacyEngineRow(s);
+      unmaskedRow(s);
+      if (changedEngine && maskTry.text.trim()) maskTryRun($(".mask-try-out"));
+      return;
+    }
+    privacyEngineRow(s);
+    if (changedEngine && maskTry.text.trim()) maskTryRun($(".mask-try-out"));
+
     const wl = wordList("words", s.redactWords || [], t("names, codenames, hosts"), t("Masked words"), (redactWords) => savePrefs({ ...keep, redactWords }), () => prefs?.redactWords);
     const words = wordRow(t("Masked words"), t("Your own words to keep from vendors, one on each row"), wl, ...wl.tools);
     const at = $("#redactWordsAnyCaseRow");

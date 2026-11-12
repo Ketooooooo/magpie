@@ -17,6 +17,7 @@ import (
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/maskrec"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -30,23 +31,43 @@ import (
 // goes to a vendor asks here. Fail closed: a forced pass needs a masker
 // that reads ctx, and one that doesn't is an error.
 func maskingFor(ctx context.Context) (context.Context, gwmw.Masker, error) {
-	switch access.Caller(ctx).Redact {
-	case access.RedactOff:
+	mode := access.Caller(ctx).Redact
+	if mode == access.RedactOff {
 		return ctx, nil, nil
-	case access.RedactOn:
-		if !redactionWanted() {
-			m, err := gwmw.Masking(true)
-			if err != nil {
-				return ctx, nil, err
-			}
-			if _, ok := m.(gwmw.ContextTeller); !ok {
-				return ctx, nil, gwmw.ErrUnmasked
-			}
-			return masking.WithForced(ctx), m, nil
-		}
 	}
-	m, err := gwmw.Masking(redactionWanted())
-	return ctx, m, err
+	st, err := requestPrivacySettings(ctx)
+	if err != nil {
+		return ctx, nil, gwmw.ErrUnmasked
+	}
+	return privacyengine.Begin(ctx, st, mode == access.RedactOn)
+}
+
+type privacySettingsKey struct{}
+
+func requestPrivacySettings(ctx context.Context) (settings.Settings, error) {
+	if st, ok := ctx.Value(privacySettingsKey{}).(settings.Settings); ok {
+		return st, nil
+	}
+	return settings.SharedChecked()
+}
+
+// pinPrivacySettings keeps the engine choice for the whole request.
+func pinPrivacySettings(r *http.Request) (*http.Request, error) {
+	if _, ok := r.Context().Value(privacySettingsKey{}).(settings.Settings); ok {
+		return r, nil
+	}
+	st, err := settings.SharedChecked()
+	if err != nil {
+		return r, err
+	}
+	return r.WithContext(context.WithValue(r.Context(), privacySettingsKey{}, st)), nil
+}
+
+// Native body recorders can contain restored originals. Only the dedicated
+// masking record captures a protected preview for a companion engine.
+func nativePrivacyCapture(ctx context.Context) bool {
+	st, err := requestPrivacySettings(ctx)
+	return err == nil && privacyengine.ID(st) == privacyengine.Builtin
 }
 
 // redacted masks a request's secrets, as the settings say, before it goes
@@ -86,6 +107,9 @@ func redactedHits(ctx context.Context, w http.ResponseWriter, body []byte) (http
 		return out{b, maskHits{n: n}}
 	})
 	o.h.took = time.Since(began)
+	st, _ := requestPrivacySettings(ctx)
+	o.h.engine = privacyengine.ID(st)
+	o.h.masker = m
 	if err == nil {
 		err = blocked(o.h)
 	}
@@ -177,6 +201,9 @@ func maskTextHits(ctx context.Context, s string) (gwmw.Masker, string, maskHits,
 		return out{got, maskHits{n: n}}
 	})
 	o.h.took = time.Since(began)
+	st, _ := requestPrivacySettings(ctx)
+	o.h.engine = privacyengine.ID(st)
+	o.h.masker = m
 	if err == nil {
 		err = blocked(o.h)
 	}
@@ -347,7 +374,11 @@ func ownMaskedAs(ctx context.Context) string {
 		// it (off masked nothing, on may have masked by the defaults)
 		return ""
 	}
-	fp := masking.Fingerprint(settings.Shared())
+	st, err := requestPrivacySettings(ctx)
+	if err != nil || privacyengine.ID(st) != privacyengine.Builtin {
+		return ""
+	}
+	fp := masking.Fingerprint(st)
 	if fp == "" {
 		return ""
 	}
@@ -369,7 +400,7 @@ func redactionWantedFor(ctx context.Context) bool {
 }
 
 func redactionWanted() bool {
-	return masking.Wanted(settings.Shared())
+	return privacyengine.Wanted(settings.Shared())
 }
 
 // maskedQuery masks a web search's query, as the settings say, before it
@@ -397,7 +428,11 @@ func maskedQuery(ctx context.Context, query string, p *provider.Provider) (strin
 // maskedCopy is body masked for a record of a request sent nowhere, nil
 // when masking fails: nothing unmasked is kept in its place.
 func maskedCopy(ctx context.Context, body []byte) []byte {
-	m, err := gwmw.Masking(redactionWanted())
+	st, err := requestPrivacySettings(ctx)
+	if err != nil {
+		return nil
+	}
+	ctx, m, err := privacyengine.Begin(ctx, st, false)
 	if err != nil {
 		return nil
 	}

@@ -203,6 +203,7 @@ type Settings struct {
 	// default downloaded AstrLink Guard: a user who had a model on disk
 	// with RedactModel off before then had turned it off, and this one
 	// hasn't.
+	PrivacyEngine    string             `json:"privacyEngine,omitempty"`
 	Redact           bool               `json:"redact,omitempty"`
 	RedactModelScore map[string]float64 `json:"redactModelScore,omitempty"`
 	RedactShape      bool               `json:"redactShape,omitempty"`
@@ -1628,6 +1629,7 @@ func (s Settings) Compact() int {
 // Discord: usage turned off on a Mac came back from a Windows box that
 // shows it; Lullaby: sharing turned on at home came on at work).
 func (s *Settings) KeepOwn(cur Settings) {
+	s.PrivacyEngine = cur.PrivacyEngine
 	s.GatewayConversations = cur.GatewayConversations
 	s.SessionReads = cur.SessionReads
 	s.UIFont, s.CodeFont = cur.UIFont, cur.CodeFont
@@ -2153,6 +2155,20 @@ func SetMTLS(on bool) error {
 		return err
 	}
 	s.MTLS = on
+	return save(s, false)
+}
+
+// SetPrivacyEngine updates the engine choice against the settings on disk.
+func SetPrivacyEngine(id string, validate func(Settings) error) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	if err := validate(s); err != nil {
+		return err
+	}
+	s.PrivacyEngine = id
 	return save(s, false)
 }
 

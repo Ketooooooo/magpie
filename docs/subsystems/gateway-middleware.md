@@ -69,3 +69,32 @@ node --test internal/gui/tests/plugin-middleware.test.cjs
 # in magpie-community/plugins: each package runs its cases.json through the hooks
 bun test packages/think-tags packages/model-map packages/param-override packages/system-prompt packages/word-guard packages/antigravity-cloak
 ```
+
+## Privacy engines in the gateway
+
+Settings → Privacy selects the engine for new gateway requests. The Magpie
+engine uses the existing built-in settings. The Gray Privacy preview uses
+the deployed rules of a local Gray host. Set `MAGPIE_GRAY_PRIVACY_URL` to a
+numeric loopback HTTP address, and set `MAGPIE_GRAY_PRIVACY_TOKEN` in the
+gateway process to the host credential. The UI checks connectivity before
+switching. Magpie keeps the built-in engine's settings when switching away.
+A Magpie custom rule, masked word, exception, category action or alternate
+unmasked route needs review before Gray can be selected.
+
+The gateway passes eligible protocol text fields through the engine. The
+Gray adapter pins the active Gray revision and uses its scan endpoint.
+A failure stops the request. The request's mappings live with the reply
+writer and are discarded at the end of the request. Insights → Masking
+shows which engine made each record, including after an engine switch.
+Gray records expose masking diagnostics without a lookup of original values.
+Recent Calls, prompt inspection, and body archives omit companion-engine
+conversation bodies while those recorders use Magpie's own scrubbing rules.
+
+The preview covers deployed Gray rules. Model detection, disclosure approval,
+and a shared rule editor require their own integration with Gray. A normal
+gateway key override and a provider explicitly configured to receive
+unmasked requests continue to apply.
+
+See [engine selection](../../internal/privacyengine/engine.go), the
+[Gray adapter](../../internal/privacyengine/gray.go), and the
+[request regression](../../internal/gateway/privacy_engine_test.go).

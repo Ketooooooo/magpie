@@ -38,6 +38,7 @@ import (
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/pluginrt"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
@@ -2361,6 +2362,11 @@ func estimate(req *Request) int {
 // serve routes one parsed-enough request to its provider.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	start := time.Now()
+	r, err := pinPrivacySettings(r)
+	if err != nil {
+		writeError(w, from, http.StatusServiceUnavailable, gwmw.ErrUnmasked.Error())
+		return
+	}
 	// a client's "off" is magpie's none, for every route and check below
 	// that reads the body's effort (plugins#334)
 	body = offAsNone(from, body)
@@ -2400,7 +2406,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// an observer may want the bodies uncut (the OTLP export, #538): the
 	// request is already whole in memory, so keep it as it came, and the
 	// reply goes to a spool as it streams
-	wholeBodies := usage.ObservedBodies() == usage.WholeBodies
+	captureBodies := nativePrivacyCapture(r.Context())
+	wholeBodies := captureBodies && usage.ObservedBodies() == usage.WholeBodies
 	// a model asked for at an effort of its own (a Claude Code tier, #536)
 	// is the model, every try of it asked for that effort
 	asked, askedEffort := askedAt(askedFor)
@@ -2415,7 +2422,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (factsOf), where each read parsed the whole conversation again,
 	// ~27 MB a time for a 4 MB Codex request (XiaoYin_OK on X)
 	holdBody(r.Context(), plain)
-	capture := &captureResponseWriter{ResponseWriter: w}
+	capture := &captureResponseWriter{ResponseWriter: w, omitBody: !captureBodies}
 	if wholeBodies {
 		capture.whole = &spool{limit: wholeBodyLimit, pattern: "magpie-whole-*"}
 	}
@@ -2449,6 +2456,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the log has the body as it went: masked, or as written where it
 	// went so
 	logBody := func(b []byte) {
+		if !captureBodies {
+			return
+		}
 		call.RequestBody, call.RequestTruncated = captureRequestBody(b)
 		if wholeBodies {
 			call.wholeIn = b
@@ -2733,7 +2743,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
-	if sentWhole && usage.ObservedBodies() != usage.NoBodies {
+	if captureBodies && sentWhole && usage.ObservedBodies() != usage.NoBodies {
 		call.maskIn = &laterMasked{ctx: context.WithoutCancel(r.Context()), plain: body}
 	}
 	maskDone = true
@@ -3415,7 +3425,10 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	// the card's text is the masked body, even where the request went
 	// unmasked: masked by PromptText when it went whole (#3973)
-	promptRead := s.inspectPrompt(tr, from, body, body, sentWhole)
+	promptRead := func() *Prompt { return nil }
+	if captureBodies {
+		promptRead = s.inspectPrompt(tr, from, body, body, sentWhole)
+	}
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
 	sent := ""       // the reasoning the last try's model was asked for
@@ -3818,10 +3831,23 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 		// a middleware's onProvider changes what this provider is sent
+		beforeProvider := attemptBody
 		attemptBody = triedOn(r.Context(), c.p, c.model, attemptBody)
 		// the system prompt the user gave this model goes after the
 		// agent's own (model_system.go)
 		attemptBody = withModelSystem(r, c.p, c.model, from, attemptBody)
+		if t, ok := maskedHits.masker.(gwmw.ContextTeller); ok && maskedHits.engine != privacyengine.Builtin && !bytes.Equal(beforeProvider, attemptBody) {
+			protected, err := gwmw.Safely(func() []byte {
+				b, _ := t.JSONHitsContext(r.Context(), attemptBody)
+				return b
+			})
+			if err != nil {
+				call.Status, call.Error = http.StatusServiceUnavailable, err.Error()
+				failTo(w, kept, from, call.Status, call.Error)
+				return
+			}
+			attemptBody = protected
+		}
 		if !s.fits(c.p.ID, webpRefused, from) {
 			// a provider that took a webp picture for one it can't read
 			// (webp.go) has every one of its requests' webps written again

@@ -68,7 +68,7 @@ function maskLoad(force) {
 const maskSettings = () => prefs || state?.settings || {};
 // on as the masker is (masking.Wanted): your own words mask with neither
 // switch on
-const maskOn = () => { const s = maskSettings(); return !!(s.redact || s.redactPersonal || s.redactWords?.length); };
+const maskOn = () => { const s = maskSettings(); return !!(s.privacyEngine === "gray" || s.redact || s.redactPersonal || s.redactWords?.length); };
 
 function maskPageOpen() {
   if (!providers && !maskProvAsked) {
@@ -590,6 +590,7 @@ function maskRecordRow(r) {
   const kinds = el("span", "msk-kinds");
   if (r.blocked) kinds.append(el("span", "msk-held", t("Held back")));
   else if (r.what && r.what !== "chat") kinds.append(el("span", "msk-what", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
+  kinds.append(el("span", "msk-what", r.engine === "gray" ? "Gray Privacy" : "Magpie"));
   const ranked = maskKindsOf(r);
   for (const [k, n] of ranked.slice(0, 3)) {
     const c = el("span", "msk-kind");
@@ -646,7 +647,7 @@ function maskOneOpen(key, r) {
       if (maskO !== o) return;
       o.r = rec;
       drawMaskOne();
-      const ps = (rec.values || []).map((x) => x.p);
+      const ps = (rec.values || []).filter((x) => x.known).map((x) => x.p);
       const vals = ps.length ? api("masking/values", { ps }).then((x) => {
         for (const [p, v] of Object.entries(x?.values || {})) { o.vals.set(p, v); maskValues.set(p, v); }
       }).catch(() => {}) : null;
@@ -727,6 +728,7 @@ function drawMaskOne() {
   const card = el("section", "msk-req");
   const who = el("div", "msk-who");
   maskRoute(who, r);
+  who.append(el("span", "msk-chip", r.engine === "gray" ? "Gray Privacy" : "Magpie"));
   if (r.model) who.append(el("span", "msk-chip", r.model));
   if (r.what && r.what !== "chat") who.append(el("span", "msk-chip", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
   card.append(who, maskSteps(r, o));

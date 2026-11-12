@@ -2,6 +2,9 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Privacy engine": "隐私引擎",
+    "Choose the engine that protects new gateway requests.": "选择用于保护新网关请求的引擎。",
+    "Gray uses its published rules. Magpie settings are kept for when you switch back.": "Gray 使用已发布的规则。切回 Magpie 时可继续使用之前的设置。",
     "Turn on masking": "打开脱敏",
     "Nothing is masked yet": "还没有要脱敏的内容",
     "Turn off masking": "关闭脱敏",
@@ -114,6 +117,9 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新消息起按原样发送；之前的消息仍脱敏，缓存不受影响",
   },
   "zh-TW": {
+    "Privacy engine": "隱私引擎",
+    "Choose the engine that protects new gateway requests.": "選擇用於保護新閘道請求的引擎。",
+    "Gray uses its published rules. Magpie settings are kept for when you switch back.": "Gray 使用已發布的規則。切回 Magpie 時可繼續使用先前的設定。",
     "Turn on masking": "開啟脫敏",
     "Nothing is masked yet": "還沒有要脫敏的內容",
     "Turn off masking": "關閉脫敏",
@@ -226,6 +232,9 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新訊息起照原樣送出；之前的訊息仍脫敏，快取不受影響",
   },
   ja: {
+    "Privacy engine": "プライバシーエンジン",
+    "Choose the engine that protects new gateway requests.": "新しいゲートウェイリクエストを保護するエンジンを選択します。",
+    "Gray uses its published rules. Magpie settings are kept for when you switch back.": "Gray は公開済みのルールを使います。Magpie に戻すと以前の設定を引き続き使えます。",
     "Turn on masking": "マスクをオンにする",
     "Nothing is masked yet": "まだ何もマスクしていません",
     "Turn off masking": "マスクをオフにする",
@@ -338,6 +347,9 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新しいメッセージからそのまま送信します。以前のメッセージはマスクしたままなので、キャッシュは保たれます",
   },
   de: {
+    "Privacy engine": "Datenschutz-Engine",
+    "Choose the engine that protects new gateway requests.": "Wähle die Engine zum Schutz neuer Gateway-Anfragen.",
+    "Gray uses its published rules. Magpie settings are kept for when you switch back.": "Gray verwendet seine veröffentlichten Regeln. Beim Wechsel zurück bleiben die Magpie-Einstellungen verfügbar.",
     "Turn on masking": "Maskierung einschalten",
     "Nothing is masked yet": "Noch wird nichts maskiert",
     "Turn off masking": "Maskierung ausschalten",

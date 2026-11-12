@@ -69,6 +69,7 @@ type Value struct {
 
 // Record is one request's masking.
 type Record struct {
+	Engine   string    `json:"engine,omitempty"`
 	Key      int64     `json:"key"` // unique, later records larger
 	Time     time.Time `json:"t"`
 	Route    int64     `json:"route,omitempty"` // its route in the trace, where it has one
