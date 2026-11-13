@@ -386,3 +386,15 @@ func TestImageGenAcceptsMiniMaxImageModel(t *testing.T) {
 		t.Error("a model it doesn't draw was taken")
 	}
 }
+
+func TestSettingsMergeKeepsSelectedPrivacyEngine(t *testing.T) {
+	cur := settings.Defaults()
+	cur.PrivacyEngine = "local-privacy-plugin"
+	got, err := Merge([]byte(`{"theme":"dark","privacyEngine":"magpie"}`), cur, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PrivacyEngine != cur.PrivacyEngine || got.Theme != "dark" {
+		t.Fatalf("ordinary settings write changed the selected privacy engine: %+v", got.PrivacyEngine)
+	}
+}

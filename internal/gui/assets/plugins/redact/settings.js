@@ -44,7 +44,7 @@ function redactRouteRow(s) {
 // (unmaskedProviders), each opening its editor, where the switch is under
 // Advanced; none, it says where the switch is (CrazyMouse_TT on X wanted
 // masking off for their own model and found no way to)
-function unmaskedRow(s) {
+function unmaskedRow(s, container = $("#redactList")) {
   const ps = s.unmaskedProviders || [];
   const r = el("div", "row pref"), who = el("div", "who"), val = el("div", "val unmasked-list");
   who.append(el("div", "name", t("Sent unmasked")), el("div", "sub", ps.length
@@ -59,8 +59,8 @@ function unmaskedRow(s) {
   }
   r.append(who, val);
   r.id = "unmaskedRow";
-  const after = $("#redactRouteRow") || $("#redactWordsWholeRow");
-  if (after) after.after(r); else $("#redactList").append(r);
+  const after = container.querySelector("#redactRouteRow") || container.querySelector("#redactWordsWholeRow");
+  if (after) after.after(r); else container.append(r);
 }
 // wordList: Masked words and Never mask as a list, one row a value
 // (noahhrreion on Discord: many words were hard to keep in one small
@@ -247,12 +247,68 @@ function redactWordsHidden(r) {
   set();
   r.querySelector(".val").append(eye);
 }
+function privacyEngineRow(s) {
+  const current = s.privacyEngine || "magpie";
+  const engines = s.privacyEngines || [];
+  const selected = engines.find((engine) => engine.id === current);
+  const label = (engine) => engine.builtin ? t("Magpie (built-in)") : engine.name;
+  const options = [{v: "none", name: "None", note: "Turn off default gateway masking."}];
+  for (const engine of engines.filter((engine) => !engine.off && !engine.conflict)) {
+    options.push({v: engine.id, name: label(engine), literalName: true, note: ""});
+  }
+  const row = el("div", "row pref");
+  const who = el("div", "who"), val = el("div", "val");
+  let sub = t("Choose the engine that protects new gateway requests.");
+  if (current === "none") {
+    sub = t("Gateway masking is off by default. Keys that require masking still use Magpie.");
+  } else if (!selected || selected.off || selected.conflict) {
+    sub = t("The selected engine is unavailable. Enable it in Plugins or choose another engine.");
+  }
+  who.append(el("div", "name", t("Privacy engine")), el("div", "sub", sub));
+  const menu = el("button", "rt-cond on", current === "none" ? t("None") : selected ? label(selected) : current);
+  menu.type = "button";
+  menu.setAttribute("aria-label", t("Privacy engine"));
+  menu.setAttribute("aria-haspopup", "menu");
+  menu.setAttribute("aria-expanded", "false");
+  menu.append(svg(CHEV, 12, 1.6));
+  menu.onclick = () => {
+    if (menu.getAttribute("aria-expanded") === "true") { closeProtoMenu(); return; }
+    openProtoMenu(menu, options, current, (id) => {
+      if (id === current) return;
+      menu.disabled = true;
+      prefWrite(api("privacy-engine", { id }));
+    }, "Privacy engine", "", "right");
+  };
+  val.append(menu);
+  row.append(who, val);
+  row.id = "privacyEngineRow";
+  const box = $("#privacyEngineList");
+  box.replaceChildren(row);
+}
+
+let displayedPrivacyEngine;
 {
   const draw = renderRedact;
   renderRedact = function (s, keep) {
+    const engine = s.privacyEngine || "magpie";
+    const changedEngine = displayedPrivacyEngine && displayedPrivacyEngine !== engine;
+    if (changedEngine) {
+      clearTimeout(maskTry.timer);
+      maskTry.seq++;
+      maskTry.res = null;
+    }
+    displayedPrivacyEngine = engine;
     const f = wordFocusOf();
     wordsRedrawing = true;
     try { draw(s, keep); } finally { wordsRedrawing = false; }
+    for (const item of $$("[data-native-privacy]")) item.hidden = engine !== "magpie";
+    privacyEngineRow(s);
+    if (changedEngine && maskTry.text.trim()) maskTryRun($(".mask-try-out"));
+    if (engine !== "magpie") {
+      if (engine !== "none" && s.unmaskedProviders?.length) unmaskedRow(s, $("#privacyEngineList"));
+      return;
+    }
+
     const wl = wordList("words", s.redactWords || [], t("names, codenames, hosts"), t("Masked words"), (redactWords) => savePrefs({ ...keep, redactWords }), () => prefs?.redactWords);
     const words = wordRow(t("Masked words"), t("Your own words to keep from vendors, one on each row"), wl, ...wl.tools);
     const at = $("#redactWordsAnyCaseRow");

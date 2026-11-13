@@ -119,7 +119,10 @@ type call struct {
 	// A fetch's head and chunks wait here, in the order they came, until
 	// the body's reader takes them: the host's reader queues them without
 	// ever waiting on one request's consumer (see push).
-	stream      bool
+	stream bool
+	// A privacy stream can share the same host with its provider fetch.
+	// Charge its window separately so it cannot consume the fetch's slot.
+	privacy     bool
 	cancellable bool // asynchronous I/O of its own, without a stream slot: an aborted call is told to the host
 	mu          sync.Mutex
 	queue       []message
@@ -205,7 +208,9 @@ var (
 // callLimit is the most calls (streaming, RPC or retiring) the host holds at
 // once. It follows from the budget: the streaming share of it plus a reserve
 // for RPCs, so the control backlog is bounded by it.
-func callLimit() int { return streamLimit() + rpcReserve }
+func callLimit() int { return streamLimit() + privacyStreamLimit() + rpcReserve }
+
+func privacyStreamLimit() int { return rpcReserve }
 
 // streamLimit is how many streaming calls the budget's windows allow at once:
 // each holds one window of credit, so their queues together stay within the
@@ -469,7 +474,8 @@ type host struct {
 	slots chan struct{}
 	// streams bounds the streaming calls to the budget's windows (see
 	// streamLimit), counted apart from slots so the RPC reserve is kept.
-	streams chan struct{}
+	streams        chan struct{}
+	privacyStreams chan struct{}
 	// ctrl is the control work waiting for the child: credit to give back
 	// and fetches to abort. One goroutine (ctrlLoop) writes it, so a fetch's
 	// reader never blocks on the child's stdin; the backlog is bounded by
@@ -1120,21 +1126,22 @@ func startOn(ctx context.Context, bun string) (*host, bool, error) {
 	hctx, hcancel := context.WithCancel(context.Background())
 	h := &host{
 		cmd: cmd, in: in,
-		calls:    map[int64]*call{},
-		dead:     make(chan struct{}),
-		slots:    make(chan struct{}, callLimit()),
-		streams:  make(chan struct{}, streamLimit()),
-		out:      make(chan writeReq, callLimit()),
-		ctrl:     map[int64]*ctrl{},
-		ctrlWake: make(chan struct{}, 1),
-		ctx:      hctx,
-		cancel:   hcancel,
-		proxy:    proxy,
-		proxyAt:  time.Now(),
-		addr:     addr,
-		output:   output,
-		waited:   waited,
-		tree:     tree,
+		calls:          map[int64]*call{},
+		dead:           make(chan struct{}),
+		slots:          make(chan struct{}, callLimit()),
+		streams:        make(chan struct{}, streamLimit()),
+		privacyStreams: make(chan struct{}, privacyStreamLimit()),
+		out:            make(chan writeReq, callLimit()),
+		ctrl:           map[int64]*ctrl{},
+		ctrlWake:       make(chan struct{}, 1),
+		ctx:            hctx,
+		cancel:         hcancel,
+		proxy:          proxy,
+		proxyAt:        time.Now(),
+		addr:           addr,
+		output:         output,
+		waited:         waited,
+		tree:           tree,
 	}
 	live.hosts[h] = true
 	live.Unlock()
@@ -1760,23 +1767,31 @@ func (h *host) beginStream(ctx context.Context) (int64, *call, error) {
 
 // admit registers a call whose stream window, if it is a stream, is taken.
 func (h *host) admit(stream bool) (int64, *call, error) {
+	return h.admitCall(stream, false, streamWindow)
+}
+
+func (h *host) admitCall(stream, privacy bool, window int) (int64, *call, error) {
+	slots := h.streams
+	if privacy {
+		slots = h.privacyStreams
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if !h.alive() {
 		if stream {
-			<-h.streams
+			<-slots
 		}
 		return 0, nil, errHostGone
 	}
-	c := &call{done: make(chan message, 1), stream: stream, wake: make(chan struct{}, 1), state: callSending}
+	c := &call{done: make(chan message, 1), stream: stream, privacy: privacy, wake: make(chan struct{}, 1), state: callSending}
 	if stream {
-		c.window = streamWindow
+		c.window = window
 	}
 	select {
 	case h.slots <- struct{}{}:
 	default:
 		if stream {
-			<-h.streams
+			<-slots
 		}
 		return 0, nil, errTooManyCalls
 	}
@@ -1790,7 +1805,9 @@ func (h *host) admit(stream bool) (int64, *call, error) {
 // releaseSlot is called only by the transition that enters released.
 func (h *host) releaseSlot(c *call) {
 	<-h.slots
-	if c.stream {
+	if c.privacy {
+		<-h.privacyStreams
+	} else if c.stream {
 		<-h.streams
 	}
 }

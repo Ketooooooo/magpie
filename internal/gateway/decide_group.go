@@ -172,11 +172,15 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 	// there, as a chat's is (wangb on Discord: 请求存档开启, 但是 systemone
 	// 的请求没有记录下来): the route names it from the start, as the
 	// Routing page reads it once Recent calls has let it go
-	capture := &captureResponseWriter{ResponseWriter: w}
+	protect := slices.ContainsFunc(cs, func(c candidate) bool { return !c.unmasked() })
+	capture := &captureResponseWriter{ResponseWriter: w, omitBody: protect && !nativePrivacyCapture(r.Context())}
 	w = capture
 	call := Call{Time: start, From: provider.Chat, To: provider.Chat, Model: asked, Provider: cs[0].p.ID, Agent: who.agent, Via: who.via,
-		wire: archiving(r, capture, start, body), headers: headerLogOf(r.Context())}
-	call.RequestBody, call.RequestTruncated = captureRequestBody(body)
+		headers: headerLogOf(r.Context())}
+	if !capture.omitBody {
+		call.wire = archiving(r, capture, start, body)
+		call.RequestBody, call.RequestTruncated = captureRequestBody(body)
+	}
 	defer discardArchive(capture)
 	tr := s.trace.beginFor(r, Route{Time: start, Agent: who.agent, Session: sessionOf(r.Header), Model: asked, Provider: cs[0].p.ID,
 		Group: group, Order: pl.order, Left: pl.left, Archive: call.archiveName()})
@@ -193,7 +197,7 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 	// translated here (decisions_systemone.go), was masked on its own
 	// route. A masker that fails or is wanted and missing sends nothing.
 	went := asked // the model the last try asked for
-	if slices.ContainsFunc(cs, func(c candidate) bool { return !c.unmasked() }) {
+	if protect {
 		mw, masked, done, hits, err := redactedHits(r.Context(), w, body)
 		defer done()
 		if err != nil { // fails closed
@@ -206,7 +210,9 @@ func (s *Server) serveDecideTries(w http.ResponseWriter, r *http.Request, body [
 			return
 		}
 		w, body = mw, masked
-		call.RequestBody, call.RequestTruncated = captureRequestBody(body)
+		if !capture.omitBody {
+			call.RequestBody, call.RequestTruncated = captureRequestBody(body)
+		}
 		// the record names the try that had it last, not the first
 		// planned (noteMaskedUntil)
 		m, noted := noteMaskedUntil(r, "systemone", hits, string(body), tr.ID, cs[0].p.ID, asked)

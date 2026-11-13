@@ -144,21 +144,25 @@ func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Pr
 			return
 		}
 		// as nativeAny's: one the user set to go unmasked goes as written
+		var hits maskHits
 		if !p.SkipsRedaction() {
-			var hits maskHits
-			if err := maskStrings(r.Context(), obj, &hits); err != nil { // fails closed
+			var done func()
+			var err error
+			w, done, hits, err = redactedStrings(r.Context(), w, obj)
+			if err != nil { // fails closed
 				fail(maskStatus(err), err.Error())
 				return
 			}
-			if hits.n > 0 {
-				b, _ := json.Marshal(obj)
-				noteMasked(r, "native", hits, string(b), 0, p.ID, model)
-			}
+			defer done()
 		}
 		body, _ = json.Marshal(obj)
+		noteMasked(r, "native", hits, sentOf(hits, body), 0, p.ID, model)
+	} else {
+		// Polls can put back only the built-in engine's shared values.
+		var done func()
+		w, done = restoring(w)
+		defer done()
 	}
-	w, done := restoring(w)
-	defer done()
 	ctx := s.metered(p.Via(r.Context()), p, "")
 	at := cmp.Or(strings.TrimRight(p.Base(provider.Responses), "/"), strings.TrimRight(p.Base(provider.Chat), "/")) + "/" + path
 	if q := r.URL.RawQuery; q != "" {
@@ -372,7 +376,6 @@ func (s *Server) nativeAny(w http.ResponseWriter, r *http.Request, p provider.Pr
 		return
 	}
 	var body []byte
-	masked := false
 	if r.Method != http.MethodGet {
 		in, admitted := s.requestBody(w, r, provider.Chat)
 		if !admitted {
@@ -406,8 +409,8 @@ func (s *Server) nativeAny(w http.ResponseWriter, r *http.Request, p provider.Pr
 			}
 			// the value inside a list, so a lone string is masked as well
 			box := []any{v}
-			var hits maskHits
-			if err := maskStrings(r.Context(), box, &hits); err != nil { // fails closed
+			rw, done, hits, err := redactedStrings(r.Context(), w, box)
+			if err != nil { // fails closed
 				fail(maskStatus(err), err.Error())
 				return
 			}
@@ -420,15 +423,12 @@ func (s *Server) nativeAny(w http.ResponseWriter, r *http.Request, p provider.Pr
 					fail(http.StatusBadRequest, err.Error())
 					return
 				}
-				body, masked = bytes.TrimSuffix(b.Bytes(), []byte("\n")), true
-				noteMasked(r, "native", hits, string(body), 0, p.ID, call.Model)
+				body = bytes.TrimSuffix(b.Bytes(), []byte("\n"))
+				w = rw
+				defer done()
+				noteMasked(r, "native", hits, sentOf(hits, body), 0, p.ID, call.Model)
 			}
 		}
-	}
-	if masked {
-		var done func()
-		w, done = restoring(w)
-		defer done()
 	}
 	ctx := s.metered(p.Via(r.Context()), p, "")
 	req, err := http.NewRequestWithContext(ctx, r.Method, at.String(), bytes.NewReader(body))

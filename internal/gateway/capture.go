@@ -48,7 +48,8 @@ func captureRequestBody(p []byte) (string, bool) {
 
 type captureResponseWriter struct {
 	http.ResponseWriter
-	body capturedBody
+	body     capturedBody
+	omitBody bool
 	// full: the whole body, for the request archive, when it is on
 	full *spool
 	// whole: the whole body, for an observer that asks for it uncut (#538)
@@ -62,7 +63,9 @@ type captureResponseWriter struct {
 
 func (w *captureResponseWriter) Write(p []byte) (int, error) {
 	w.live.observe(p)
-	w.body.add(p)
+	if !w.omitBody {
+		w.body.add(p)
+	}
 	w.tools.add(p)
 	if w.full != nil {
 		w.full.add(p)

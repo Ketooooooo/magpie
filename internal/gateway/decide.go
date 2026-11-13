@@ -431,19 +431,12 @@ func (s *Server) askJev(ctx context.Context, wait time.Duration, p provider.Prov
 // maskedState masks what Jev is told of a turn, each as maskedText does.
 func maskedState(ctx context.Context, text, user, reply string) (string, string, string, error) {
 	out := [3]string{text, user, reply}
-	var all maskHits
-	for i, v := range out {
-		if v == "" {
-			continue
-		}
-		_, m, h, err := maskTextHits(ctx, v)
-		if err != nil {
-			return "", "", "", err
-		}
-		out[i] = m
-		all.add(h)
+	m, hits, err := maskTexts(ctx, out[:])
+	closeMasker(m)
+	if err != nil {
+		return "", "", "", err
 	}
-	noteMasked(nil, "decide", all, strings.Join(out[:], "\n"), 0, "", "")
+	noteMasked(nil, "decide", hits, strings.Join(out[:], "\n"), 0, "", "")
 	return out[0], out[1], out[2], nil
 }
 
