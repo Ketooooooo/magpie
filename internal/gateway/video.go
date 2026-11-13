@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/catalog"
+	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -1125,29 +1126,27 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	call.To = provider.Chat
-	prompt := f.Prompt
-	var hits, extra maskHits
+	var hits maskHits
 	// masked unless every model it may start on is a provider the user
 	// set to go unmasked (unmaskedMembers), as a chat's is
 	if !unmaskedMembers(tries) {
+		fields := []any{f.Prompt, f.Extra}
 		var unmask func()
-		w, f.Prompt, unmask, hits, err = redactedPromptHits(r.Context(), w, f.Prompt)
+		w, unmask, hits, err = redactedStrings(r.Context(), w, fields)
 		defer unmask()
-		// the fields passed on as they came are masked as the prompt is: a
-		// negative_prompt is the user's text all the same
-		if err == nil {
-			err = maskStrings(r.Context(), f.Extra, &extra)
-		}
 		if err != nil { // fails closed
 			fail(maskStatus(err), err.Error())
 			return
 		}
+		f.Prompt = fields[0].(string)
 	}
-	n := extra.n
-	hits.add(extra)
 	sent := f.Prompt
-	if b, e := json.Marshal(f.Extra); e == nil && extra.n > 0 {
-		sent += " " + string(b)
+	if len(f.Extra) > 0 && hits.n > 0 {
+		if b, e := json.Marshal(f.Extra); e == nil && slices.ContainsFunc(hits.hits, func(h gwmw.Hit) bool {
+			return h.Placeholder != "" && bytes.Contains(b, []byte(h.Placeholder))
+		}) {
+			sent += " " + string(b)
+		}
 	}
 	// the record names the member that had it last (noteMaskedUntil)
 	// the Routing page lists it as it does a chat, each member asked a
@@ -1161,11 +1160,6 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	masked, noted := noteMaskedUntil(r, "video", hits, sent, side.id(), cmp.Or(call.Provider, p.ID), call.Model)
 	side.masked(masked)
 	defer func() { noted(call.Provider, model) }()
-	if n > 0 && f.Prompt == prompt { // the prompt's mask wraps w already
-		var done func()
-		w, done = restoring(w)
-		defer done()
-	}
 	ctx, cancel := drawWithin(r.Context(), videoTimeout)
 	defer cancel()
 	var (
@@ -1611,41 +1605,4 @@ func (s *Server) remoteVideoContent(ctx context.Context, w http.ResponseWriter, 
 	}
 	w.WriteHeader(200)
 	io.Copy(w, io.LimitReader(res.Body, maxVideoBytes))
-}
-
-// maskStrings masks every string in v (a decoded JSON value) in place as a
-// prompt is masked, adding what it swapped to h; an error when it can't
-// (fail closed).
-func maskStrings(ctx context.Context, v any, h *maskHits) error {
-	one := func(str string) (string, error) {
-		_, m, got, err := maskTextHits(ctx, str)
-		h.add(got)
-		return m, err
-	}
-	var err error
-	switch x := v.(type) {
-	case map[string]any:
-		for k, e := range x {
-			if str, ok := e.(string); ok {
-				x[k], err = one(str)
-			} else {
-				err = maskStrings(ctx, e, h)
-			}
-			if err != nil {
-				return err
-			}
-		}
-	case []any:
-		for i, e := range x {
-			if str, ok := e.(string); ok {
-				x[i], err = one(str)
-			} else {
-				err = maskStrings(ctx, e, h)
-			}
-			if err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }

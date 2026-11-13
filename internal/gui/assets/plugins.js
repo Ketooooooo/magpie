@@ -1336,8 +1336,8 @@
         else if (!x.signedIn && subs.some((y) => y.signedIn)) s.title = t("{name} is a subscription of its own; {other} works without it", { name: nx, other: subName(subs.find((y) => y.signedIn)) });
         sub.append(s);
       }
-    } else if ((mw || ag || gw || e.isGateway || toolsOnly || (e.page || e.panels?.length) && e.inMagpieOnly) && !e.providers.length) {
-      // only middleware, a request hook, an agent, tools, a page or panels: its own line says what it does
+    } else if ((mw || ag || gw || e.isGateway || toolsOnly || e.inMagpieOnly) && !e.providers.length) {
+      // a non-provider plugin: its own line says what it does
     } else if (clashes.length && !e.providers.length) {
       // its own line below says whose it is
     } else if (e.providers.length) sub.textContent = t("Signs in to {names}", { names: e.providers.join(t(", ")) });

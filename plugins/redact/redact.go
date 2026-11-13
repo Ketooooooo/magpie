@@ -16,6 +16,7 @@ import (
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/pluginrt"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -43,7 +44,7 @@ func InUse() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	if masking.Wanted(st) {
+	if privacyengine.Wanted(st) {
 		return 1, nil
 	}
 	// a key held to masking (access.RedactOn) uses it with the setting off

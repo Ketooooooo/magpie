@@ -2,6 +2,12 @@
 // kernel adds them to i18n.js's (magpie.strings).
 magpie.strings({
   zh: {
+    "Magpie (built-in)": "Magpie（内置）",
+    "Turn off default gateway masking.": "关闭默认网关脱敏。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "网关默认不脱敏。要求脱敏的网关密钥仍使用 Magpie。",
+    "The selected engine is unavailable. Enable it in Plugins or choose another engine.": "当前引擎不可用。请在插件页启用它，或选择其他引擎。",
+    "Privacy engine": "隐私引擎",
+    "Choose the engine that protects new gateway requests.": "选择用于保护新网关请求的引擎。",
     "Turn on masking": "打开脱敏",
     "Nothing is masked yet": "还没有要脱敏的内容",
     "Turn off masking": "关闭脱敏",
@@ -114,6 +120,12 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新消息起按原样发送；之前的消息仍脱敏，缓存不受影响",
   },
   "zh-TW": {
+    "Magpie (built-in)": "Magpie（內建）",
+    "Turn off default gateway masking.": "關閉預設閘道遮罩。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "閘道預設不遮罩。要求遮罩的閘道金鑰仍使用 Magpie。",
+    "The selected engine is unavailable. Enable it in Plugins or choose another engine.": "目前的引擎無法使用。請在外掛頁啟用它，或選擇其他引擎。",
+    "Privacy engine": "隱私引擎",
+    "Choose the engine that protects new gateway requests.": "選擇用於保護新閘道請求的引擎。",
     "Turn on masking": "開啟脫敏",
     "Nothing is masked yet": "還沒有要脫敏的內容",
     "Turn off masking": "關閉脫敏",
@@ -226,6 +238,12 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新訊息起照原樣送出；之前的訊息仍脫敏，快取不受影響",
   },
   ja: {
+    "Magpie (built-in)": "Magpie（内蔵）",
+    "Turn off default gateway masking.": "ゲートウェイの既定のマスク処理を無効にします。",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "既定ではマスク処理を行いません。必須設定のキーでは引き続き Magpie を使用します。",
+    "The selected engine is unavailable. Enable it in Plugins or choose another engine.": "選択したエンジンは利用できません。プラグインで有効にするか、別のエンジンを選択してください。",
+    "Privacy engine": "プライバシーエンジン",
+    "Choose the engine that protects new gateway requests.": "新しいゲートウェイリクエストを保護するエンジンを選択します。",
     "Turn on masking": "マスクをオンにする",
     "Nothing is masked yet": "まだ何もマスクしていません",
     "Turn off masking": "マスクをオフにする",
@@ -338,6 +356,12 @@ magpie.strings({
     "Sent as written in new messages; earlier ones stay masked, so the cache still holds": "新しいメッセージからそのまま送信します。以前のメッセージはマスクしたままなので、キャッシュは保たれます",
   },
   de: {
+    "Magpie (built-in)": "Magpie (eingebaut)",
+    "Turn off default gateway masking.": "Standardmaskierung des Gateways ausschalten.",
+    "Gateway masking is off by default. Keys that require masking still use Magpie.": "Das Gateway maskiert standardmäßig nicht. Schlüssel mit Maskierungspflicht verwenden weiterhin Magpie.",
+    "The selected engine is unavailable. Enable it in Plugins or choose another engine.": "Die gewählte Engine ist nicht verfügbar. Aktiviere sie unter Plugins oder wähle eine andere Engine.",
+    "Privacy engine": "Datenschutz-Engine",
+    "Choose the engine that protects new gateway requests.": "Wähle die Engine zum Schutz neuer Gateway-Anfragen.",
     "Turn on masking": "Maskierung einschalten",
     "Nothing is masked yet": "Noch wird nichts maskiert",
     "Turn off masking": "Maskierung ausschalten",
