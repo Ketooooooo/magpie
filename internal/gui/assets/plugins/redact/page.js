@@ -793,8 +793,13 @@ function maskBlocked(r) {
   ic.append(sv("path", { d: "m6 6 4 4M10 6l-4 4" }));
   head.append(ic, el("h2", "", t("This request was not sent")));
   const kinds = [...new Set((r.values || []).filter((x) => x.a === "block").map((x) => x.k))];
+  const labels = kinds.map(maskKindName).join(", ") || t("a value");
+  if (r.engine && r.engine !== "magpie") {
+    box.append(head, el("p", "", t("{engine} blocked this request because it contained {kinds}.", { engine: maskEngineName(r), kinds: labels })));
+    return box;
+  }
   const a = maskWho(r.agent, "agent").name, p = r.provider ? maskWho(r.provider, "provider").name : t("A vendor");
-  box.append(head, el("p", "", t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: kinds.map(maskKindName).join(", ") || t("a value"), provider: p, agent: r.agent ? a : t("The agent") })));
+  box.append(head, el("p", "", t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: labels, provider: p, agent: r.agent ? a : t("The agent") })));
   const tools = el("div", "msk-btools");
   if (kinds.length) {
     const b = el("button", "text primary", t("Mask it instead"));

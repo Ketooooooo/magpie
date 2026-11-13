@@ -34,7 +34,7 @@ const value = "` + testPrivateValue + `", token = "` + testPlaceholder + `";
 export function preview({body, texts}) {
   const hits = [];
   const mask = text => {
-    if (text.includes(value)) hits.push({kind:"EMAIL", placeholder:token});
+    if (text.includes(value)) hits.push({kind:"EMAIL", placeholder:token, action:text.includes("hold this") ? "block" : ""});
     return text.replaceAll(value, token);
   };
   return {...(body ? {body:mask(body)} : {texts:texts.map(mask)}), hits, restore:hits.length > 0};
@@ -101,6 +101,14 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 	if len(records) != 2 || records[0].Engine != testPrivacyEngine || records[0].Back[testPlaceholder] != 1 ||
 		records[1].Engine != privacyengine.Builtin {
 		t.Fatalf("expected masking records for both engines and the hosted restoration: %+v", records)
+	}
+
+	f.got = nil
+	blocked := strings.Replace(body, testPrivateValue, "hold this "+testPrivateValue, 1)
+	if code, reply := post(t, path, blocked); code != http.StatusBadRequest ||
+		len(f.got) != 0 || !strings.Contains(reply, "Local detector blocks EMAIL") ||
+		strings.Contains(reply, testPrivateValue) || strings.Contains(reply, "Settings › Privacy") {
+		t.Fatalf("expected an engine-specific block without forwarding: %d %s", code, reply)
 	}
 
 	if err := plugin.SetOff(dir, true); err != nil {

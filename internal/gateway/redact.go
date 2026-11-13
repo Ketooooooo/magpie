@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -328,15 +329,19 @@ func hitsOf(hits []gwmw.Hit) maskHits {
 	return h
 }
 
-// maskBlocked is a request held back: it has a value of a kind the user
-// set to block (Settings › Privacy). It names the kind and the value's
-// hint, never the value.
-type maskBlocked struct{ hit gwmw.Hit }
+// maskBlocked names the engine, kind and hint of a held value.
+type maskBlocked struct {
+	hit    gwmw.Hit
+	engine string
+}
 
 func (e maskBlocked) Error() string {
 	one := fmt.Sprintf("%d characters", e.hit.Len)
 	if e.hit.Head != "" {
 		one = e.hit.Head + "…, " + one
+	}
+	if e.engine != "" {
+		return fmt.Sprintf("magpie held this request back: %s blocks %s (%s). Nothing was sent.", e.engine, e.hit.Kind, one)
 	}
 	return fmt.Sprintf("magpie held this request back: Settings › Privacy blocks %s, and it has one (%s). Nothing was sent.", e.hit.Kind, one)
 }
@@ -347,7 +352,11 @@ func blocked(h maskHits) error {
 	for _, x := range h.hits {
 		if x.Action == "block" {
 			noteBlocked(h)
-			return maskBlocked{x}
+			var engine string
+			if h.engine != "" && h.engine != privacyengine.Builtin {
+				engine = cmp.Or(h.engineName, h.engine)
+			}
+			return maskBlocked{hit: x, engine: engine}
 		}
 	}
 	return nil
