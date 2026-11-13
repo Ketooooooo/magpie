@@ -27,11 +27,13 @@ type Info struct {
 }
 
 type engine struct {
-	info    Info
-	wanted  func(settings.Settings) bool
-	check   func(context.Context) error
-	begin   func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
-	preview func(context.Context, string) (string, []gwmw.Hit, bool, error)
+	info        Info
+	wanted      func(settings.Settings) bool
+	check       func(context.Context) error
+	begin       func(context.Context, settings.Settings, bool) (context.Context, gwmw.Masker, error)
+	preview     func(context.Context, string) (string, []gwmw.Hit, bool, error)
+	actions     recordActionHandler
+	recordValue func(string) (string, bool)
 }
 
 type registry map[string]engine
@@ -133,16 +135,20 @@ func Wanted(st settings.Settings) bool {
 	}
 }
 
-func Begin(ctx context.Context, st settings.Settings, forced bool) (context.Context, gwmw.Masker, error) {
+func Begin(ctx context.Context, st settings.Settings, forced bool) (*Session, error) {
 	id := RequestID(st, forced)
 	if id == Disabled {
-		return ctx, nil, nil
+		return nil, nil
 	}
 	e, err := lookup(id)
 	if err != nil {
-		return ctx, nil, err
+		return nil, err
 	}
-	return e.begin(ctx, st, forced)
+	ctx, m, err := e.begin(ctx, st, forced)
+	if err != nil || m == nil {
+		return nil, err
+	}
+	return &Session{ctx: ctx, masker: m, info: e.info}, nil
 }
 
 func Preview(ctx context.Context, st settings.Settings, input string) (string, []gwmw.Hit, bool, error) {

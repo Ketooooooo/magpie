@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/yetone/magpie/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine/internal/pii"
 	"github.com/yetone/magpie/internal/settings"
 )
 

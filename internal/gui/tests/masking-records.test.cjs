@@ -58,6 +58,7 @@ const SENT = JSON.stringify({ model: "claude-opus-4-1", system: "You are Claude 
 ] });
 const records = [
   { key: K3, t: ago(60e3), route: "messages", what: "chat", agent: "claude", provider: "anthropic", model: "claude-opus-4-1", n: 1, blocked: true,
+    actions: [{ id: "mask-blocked-kinds", label: "Mask this category instead", scope: "PRIVATE_KEY" }],
     values: [{ p: PK, k: "PRIVATE_KEY", b: "rule", h: "b3Bl", l: 400, n: 1, a: "block" }],
     snips: { [PK]: `-----BEGIN OPENSSH PRIVATE KEY----- ${PK}` } },
   { key: K2, t: ago(120e3), route: "messages", what: "chat", agent: "claude", provider: "anthropic", model: "claude-opus-4-1", n: 3, took: 1800, back: { [KEY]: 1 },
@@ -81,9 +82,9 @@ function serve(lang, sum, asked, opts = {}) {
       if (req.method() === "POST") { asked.push("settings " + req.postData()); Object.assign(settings, JSON.parse(req.postData())); }
       return json(settings);
     }
-    if (url.pathname === "/api/settings/redact-actions") {
-      asked.push("actions " + req.postData());
-      settings.redactActions = JSON.parse(req.postData()).actions;
+    if (url.pathname === "/api/masking/record-action") {
+      asked.push("action " + req.postData());
+      delete settings.redactActions.PRIVATE_KEY;
       return json(settings);
     }
     if (url.pathname === "/api/providers") return json({ providers: [{ id: "anthropic", name: "Anthropic", icon: "anthropic", agents: [], models: [] }, { id: "openai", name: "OpenAI", icon: "openai", agents: [], models: [] }], presets: [], excluded: [],
@@ -159,7 +160,7 @@ const shot = (page, name) => process.env.MASK_SHOTS && page.screenshot({ path: p
 // English that a translated page must not show
 const english = ["Kept from vendors", "By request", "By value", "masked these on this computer", "Different values", "values masked", "Held back",
   "Request content", "How it was masked", "What happened", "Side by side", "Only the parts masking changed", "parts unchanged", "Found by", "In the answer",
-  "This request was not sent", "Mask it instead", "See the rules", "Nothing to put back", "no longer in memory", "never on disk", "Masked most", "Local model"];
+  "This request was not sent", "Mask this category instead", "See the rules", "Nothing to put back", "no longer in memory", "never on disk", "Masked most", "Local model"];
 const untranslated = async (page, lang) => {
   if (lang === "en") return;
   const said = await page.locator("#view-masking").innerText();
@@ -345,8 +346,8 @@ for (const engine of (process.env.BROWSER ? [process.env.BROWSER] : ["chromium",
         assert.deepEqual(await wide(page), { page: false, over: [] });
         await shot(page, `${engine}-${lang}-${width}-blocked`);
         await one.locator(".msk-btools button").first().click();
-        await until(() => asked.some((x) => x.startsWith("actions")));
-        assert.deepEqual(JSON.parse(asked.find((x) => x.startsWith("actions")).slice(8)), { actions: { PRIVATE_KEY: "mask" } });
+        await until(() => asked.some((x) => x.startsWith("action ")));
+        assert.deepEqual(JSON.parse(asked.find((x) => x.startsWith("action ")).slice(7)), { recordKey: K3, actionId: "mask-blocked-kinds" });
 
         // back to the list, as it was
         await one.locator(".msk-back").click();

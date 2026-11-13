@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/netproxy"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
@@ -117,29 +117,29 @@ func TestLocalUnredactedEmbeddings(t *testing.T) {
 // countingMasker is the masker plugins/redact serves, counting the bodies
 // it is asked to scan.
 type countingMasker struct {
-	masking.Masker
+	builtinMasker
 	scans *atomic.Int32
 }
 
 func (m countingMasker) JSON(b []byte) ([]byte, int) {
 	m.scans.Add(1)
-	return m.Masker.JSON(b)
+	return m.builtinMasker.JSON(b)
 }
 
 func (m countingMasker) JSONHits(b []byte) ([]byte, []gwmw.Hit) {
 	m.scans.Add(1)
-	return m.Masker.JSONHits(b)
+	return m.builtinMasker.JSONHits(b)
 }
 
 func (m countingMasker) JSONHitsContext(ctx context.Context, b []byte) ([]byte, []gwmw.Hit) {
 	m.scans.Add(1)
-	return m.Masker.JSONHitsContext(ctx, b)
+	return m.builtinMasker.JSONHitsContext(ctx, b)
 }
 
 // scanCount serves a countingMasker for t and answers its count.
 func scanCount(t *testing.T) *atomic.Int32 {
 	n := new(atomic.Int32)
-	t.Cleanup(gwmw.Mask(countingMasker{scans: n}))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(countingMasker{builtinMasker: privacyengine.BuiltinForTest(), scans: n}))
 	return n
 }
 

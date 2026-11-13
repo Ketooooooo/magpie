@@ -1,7 +1,6 @@
 package gwmw
 
 import (
-	"net/http"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -11,13 +10,6 @@ import (
 type agent string
 
 func (agent) Begin(Info) Run { return nil }
-
-type masker string
-
-func (m masker) JSON(b []byte) ([]byte, int)                              { return b, 0 }
-func (m masker) Text(s string) (string, int)                              { return string(m) + s, 1 }
-func (masker) Restore(s string, _ bool) string                            { return s }
-func (masker) Writer(w http.ResponseWriter) (http.ResponseWriter, func()) { return w, func() {} }
 
 // Agent middlewares run in the order they were registered; one removed is
 // gone, and removing it again takes nothing else.
@@ -32,50 +24,6 @@ func TestAgentsInOrder(t *testing.T) {
 	ra()
 	if got := Agents(); !slices.Equal(got, []Agent{agent("b")}) {
 		t.Fatalf("after a's removal %v", got)
-	}
-}
-
-// The last masker registered serves until it is removed; with none, a
-// request masking is wanted for is refused (fail closed), and one it isn't
-// wanted for goes as it is.
-func TestMaskingFailsClosed(t *testing.T) {
-	if m, err := Masking(false); m != nil || err != nil {
-		t.Fatalf("not wanted: %v %v", m, err)
-	}
-	if _, err := Masking(true); err != ErrUnmasked {
-		t.Fatalf("wanted, none served: %v", err)
-	}
-	r1 := Mask(masker("1"))
-	defer r1()
-	r2 := Mask(masker("2"))
-	if m, err := Masking(true); err != nil || m != masker("2") {
-		t.Fatalf("stacked: %v %v", m, err)
-	}
-	r2()
-	if m, err := Masking(true); err != nil || m != masker("1") {
-		t.Fatalf("after the last's removal: %v %v", m, err)
-	}
-}
-
-// With no masker served, the refresh is asked once, and a masker it serves
-// is used; another within a second isn't asked again, and is refused.
-func TestServedRefreshesOnce(t *testing.T) {
-	ForgetRefreshForTest()
-	var asked atomic.Int32
-	var remove func()
-	stop := Refresh(func() { asked.Add(1); remove = Mask(masker("r")) })
-	defer stop()
-	if m, ok := Served(); !ok || m != masker("r") || asked.Load() != 1 {
-		t.Fatalf("refreshed: %v %v asked %d", m, ok, asked.Load())
-	}
-	remove()
-	if _, ok := Served(); ok || asked.Load() != 1 {
-		t.Fatalf("within a second: asked %d", asked.Load())
-	}
-	ForgetRefreshForTest()
-	stop()
-	if _, ok := Served(); ok || asked.Load() != 1 {
-		t.Fatalf("after stop: asked %d", asked.Load())
 	}
 }
 

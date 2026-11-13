@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/pii/guard"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // gateFinder is a model whose reads wait at a gate, counting how many

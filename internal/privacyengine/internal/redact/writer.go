@@ -18,6 +18,7 @@ import (
 // is added or dropped, so the text the agent puts together is the same.
 type Writer struct {
 	w       http.ResponseWriter
+	allowed map[string]struct{}
 	mode    int // 0 not yet known, 1 a stream, 2 a whole body, 3 left as it is
 	buf     bytes.Buffer
 	pending *held
@@ -42,6 +43,11 @@ type held struct {
 
 // NewWriter wraps w; Finish must be called when the handler is done.
 func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w} }
+
+// NewScopedWriter restores only the placeholders the task was sent.
+func NewScopedWriter(w http.ResponseWriter, allowed map[string]struct{}) *Writer {
+	return &Writer{w: w, allowed: allowed}
+}
 
 func (rw *Writer) Header() http.Header { return rw.w.Header() }
 
@@ -187,14 +193,14 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count()))
+		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.allowed))
 	case stream:
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
 			rw.pending = nil
 		}
 		if rw.buf.Len() > 0 {
-			rw.w.Write([]byte(restore(rw.buf.String(), false, rw.count())))
+			rw.w.Write([]byte(restore(rw.buf.String(), false, rw.count(), rw.allowed)))
 		}
 	}
 	rw.Flush()
@@ -220,7 +226,7 @@ func (rw *Writer) event(ev []byte) error {
 		if err := rw.release(); err != nil {
 			return err
 		}
-		_, err := rw.w.Write([]byte(restore(string(ev), false, rw.count())))
+		_, err := rw.w.Write([]byte(restore(string(ev), false, rw.count(), rw.allowed)))
 		return err
 	}
 	if rw.pending != nil && waiting(name, data) {
@@ -228,7 +234,7 @@ func (rw *Writer) event(ev []byte) error {
 		// piece held: released for it, the held piece went out with the
 		// start of its placeholder as it was, the next piece with the
 		// rest, and neither was a placeholder to put back (#5287)
-		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count()), post))
+		_, err := rw.w.Write(rebuild(pre, restoreJSON(data, rw.count(), rw.allowed), post))
 		return err
 	}
 	ctx := name + "|" + eventCtx(data)
@@ -266,12 +272,12 @@ func (rw *Writer) event(ev []byte) error {
 					tails, cuts = map[string]string{}, map[string]string{}
 				}
 				tails[path] = s[len(s)-n:]
-				cuts[path] = Restore(s[:len(s)-n], asJSON(key, typ))
+				cuts[path] = restore(s[:len(s)-n], asJSON(key, typ), nil, rw.allowed)
 			}
 		}
 		// counted here only: cut is s again without its tail, and
 		// whichever of the two goes out, the places are these
-		return restore(s, asJSON(key, typ), rw.count())
+		return restore(s, asJSON(key, typ), rw.count(), rw.allowed)
 	})
 	full := rebuild(pre, restored, post)
 	if tails == nil {

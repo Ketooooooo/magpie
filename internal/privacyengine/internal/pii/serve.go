@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/lazyre"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/proc"
-	"github.com/yetone/magpie/internal/redact"
 )
 
 // hello is the line pf-serve writes once the model is loaded.

@@ -218,17 +218,40 @@ not offered at all.
 
 ## Gateway extension points (P3): middleware
 
-The middleware point is what changes a request on its way through the
-gateway and its reply on the way back. It has two places, each with its own
-failure policy, in [`internal/gwmw`](../../internal/gwmw/gwmw.go):
+Agent middleware and privacy protection sit at separate gateway boundaries.
 
 | Part | What it does | Source |
 | --- | --- | --- |
-| `gwmw.Agent` | A middleware on a request an agent sent, in the agent's own API, before the gateway routes it, and on its reply as the agent gets it: `Begin(Info) Run`, and the run's `Request` (a `Reject` ends the request in the agent's error shape), `Wrap` and `End`. `Use(a)` registers one until its remove; `Agents` lists them in order. `serveAgent` runs each in turn; with none it calls `serve` directly. It fails open, as the JS middleware always did. | [`gwmw.go`](../../internal/gwmw/gwmw.go), [`middleware.go`](../../internal/gateway/middleware.go) |
-| `plugins/middleware` | Requires `gateway`, Essential. Apply registers `middleware.Chain`, the JS gateway middleware ([Gateway middleware](gateway-middleware.md)), whose place, API, limits and fail-open policy are unchanged. `InUse` is `middleware.On()`, the middleware plugins.json has on. Off, agents' requests go as they came and no middleware is called, while plugins.json is left as it is. The gateway's `KeepFresh` watches plugins.json too, so a middleware added from the CLI or the window turns it on within 2s, and a request before then asks the gate's refresh itself (`gwmw.AgentsWanted`: with no agent middleware registered and `middleware.On()` above 0, at most once a second), so the middleware runs on that request, as it did within a second before it was a plugin. | [`middleware.go`](../../plugins/middleware/middleware.go), [`run.go`](../../internal/middleware/run.go) |
-| `gwmw.Masker` | Masks what magpie sends a vendor and puts the values back in what comes back: `JSON`, `Text`, `Restore` and `Writer`. `Mask(m)` serves one until its remove (the last registered serves). It fails closed: `Masking(wanted)` is the masker for a request, or `ErrUnmasked` when the settings ask for masking and none serves, and `Safely` makes a masker that panics an error. The gateway's call sites (`serve`, count_tokens, embeddings and audio, transcriptions, text to speech, images, video, the search stand-ins and their queries, the Codex backend) answer either with 503 "…nothing was sent", and the vendor gets nothing. `Served`, with none, asks the gate's refresh (the gateway's is `pluginrt.Refresh`, set by `gwmw.Refresh` in `ListenAndServe`) at most once a second and never from inside one, then looks again, so masking turned on a moment ago turns the plugin on for the request that needs it. | [`gwmw.go`](../../internal/gwmw/gwmw.go), [`redact.go`](../../internal/gateway/redact.go), [`gateway.go`](../../internal/gateway/gateway.go) |
-| `gwmw.Teller` | What a masker can say besides masking: `JSONHits` and `TextHits` mask as `JSON` and `Text` do and also return each placeholder made or reused (`Hit`: placeholder, kind, finder, head, length), and `Value` is what a placeholder stood for while this masker remembers it. Optional: the gateway records a request's masking only when the served masker is one (`masking.Masker` is), and Settings → Privacy's records and values need it; a masker without it masks the same and leaves no record. | [`gwmw.go`](../../internal/gwmw/gwmw.go), [`masked.go`](../../internal/gateway/masked.go), [`masking.go`](../../internal/masking/masking.go) |
-| `plugins/redact` | Requires `settings` and `gateway`, Essential. Apply serves `masking.Masker`, which reads settings.json on each call and masks with `internal/redact` as before (it lives in `internal/masking` because `settings` imports `redact`). `InUse` is `masking.Wanted`: *Mask secrets*, *Mask personal data* or a word of the user's own; settings.json that can't be read is an error, so it stays on. Since it is in use whenever masking is asked for, it can only be off while nothing is; the 503 is for a refresh not yet seen or a plugins.yml edited by hand. | [`redact.go`](../../plugins/redact/redact.go), [`masking.go`](../../internal/masking/masking.go) |
+| `gwmw.Agent` | Middleware on an agent's request and reply. `Use` registers it, `Agents` lists it, and `AgentsWanted` refreshes missing middleware when needed. | [gwmw.go](../../internal/gwmw/gwmw.go) |
+| `privacyengine.Session` | `Begin` binds the chosen engine to the request. The session protects JSON or text and restores the reply. Protection failure stops the request. The main model attempt checks for a completed protection step or a user-configured exemption before calling its provider. | [engine.go](../../internal/privacyengine/engine.go), [session.go](../../internal/privacyengine/session.go), [gateway.go](../../internal/gateway/gateway.go) |
+| Built-in privacy engine | `plugins/redact` enables it for the plugin's lifetime. It uses the request's settings snapshot and may refresh the plugin on demand. Go limits imports of its masker, scanner and local model to the privacy engine tree. The public `policy` package exposes the saved rule format and irreversible scrubbing for Magpie's own logs. | [builtin.go](../../internal/privacyengine/builtin.go), [policy.go](../../internal/privacyengine/policy/policy.go) |
+
+A direct MCP search restores its answer with the session that protected
+its query. Video polls and single Ark task polls restore only placeholders
+recorded for that task and gateway identity. The built-in mapping is
+available in memory. An unknown task, a restart, or an engine without
+cross-request restoration leaves placeholders in place.
+
+The history API resolves originals using the record key and the
+placeholders on that record. It dispatches to the originating engine.
+A plugin that only retains a request-local mapping keeps that mapping
+out of history.
+
+### Privacy engine actions on blocked records
+
+A hosted engine can attach a `recordAction` to a blocking hit. The built-in
+engine also offers Never mask on recorded values. An action gives the button
+an `id`, `label` and optional `scope`, and an engine-owned
+`targetRef` that contains no original value. The ID is unique per record.
+Magpie keeps the offer in the masking record and only exposes its display
+fields to the window. The window posts the record key and action ID to
+`/api/masking/record-action`. The privacy engine registry sends the saved
+offer to the engine that made the record, even after an engine switch.
+An unavailable engine or unoffered action fails without a settings write.
+Hosted engines implement the optional
+`applyRecordAction({id, targetRef}, {directory, signal})` export. The
+engine validates the target against its current settings and saves the
+change before it returns success.
 
 ## Gateway extension points (P3): tool
 

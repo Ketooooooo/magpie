@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yetone/magpie/internal/pii"
-	"github.com/yetone/magpie/internal/redact"
+	"github.com/yetone/magpie/internal/privacyengine/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 

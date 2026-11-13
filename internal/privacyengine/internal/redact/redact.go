@@ -1729,17 +1729,16 @@ var placeholderBody = lazyre.New(`[A-Za-z][A-Za-z0-9_]*_[A-Za-z2-7]{8}`)
 // braces, or changes the case. Any of those is put back too when what is
 // left names a placeholder this magpie made: its kind and the 8 of its
 // hash, which no other text has by chance (shensmart on Discord).
-func Restore(s string, escaped bool) string { return restore(s, escaped, nil) }
+func Restore(s string, escaped bool) string { return restore(s, escaped, nil, nil) }
 
-// restore is Restore, counting in put, when it isn't nil, each
-// placeholder it put a value back for.
-func restore(s string, escaped bool, put map[string]int) string {
+// restore counts replacements in put and restricts them to allowed when set.
+func restore(s string, escaped bool, put map[string]int, allowed map[string]struct{}) string {
 	mu.RLock()
 	defer mu.RUnlock()
 	if len(values) == 0 {
 		return s
 	}
-	s = restoreShapes(s, put)
+	s = restoreShapes(s, put, allowed)
 	if !strings.Contains(s, "_") {
 		return s
 	}
@@ -1751,6 +1750,9 @@ func restore(s string, escaped bool, put map[string]int) string {
 			continue
 		}
 		p := canonical(s[a:z])
+		if _, ok := allowed[p]; allowed != nil && !ok {
+			continue
+		}
 		v, ok := values[p]
 		if !ok {
 			continue

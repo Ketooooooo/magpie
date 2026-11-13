@@ -205,9 +205,12 @@ func shaped(kind, v string) string {
 // by chance in any case, as a placeholder's 8 of its hash are not
 // (canonical). A key's made-up form is put back only as written: a key's
 // case is part of it.
-func restoreShapes(s string, put map[string]int) string {
+func restoreShapes(s string, put map[string]int, allowed map[string]struct{}) string {
 	lower, stale := "", true // s in small letters, made when first needed
 	for f, kind := range shapes {
+		if _, ok := allowed[f]; allowed != nil && !ok {
+			continue
+		}
 		if !foldStandIn(kind) {
 			if n := strings.Count(s, f); n > 0 {
 				s = strings.ReplaceAll(s, f, values[f])

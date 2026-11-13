@@ -1,12 +1,13 @@
 package gui
 
 import (
+	"github.com/yetone/magpie/internal/settings"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/yetone/magpie/internal/maskrec"
-	"github.com/yetone/magpie/internal/redact"
+	"github.com/yetone/magpie/internal/privacyengine"
 )
 
 // fakeMaskAlerts is maskAlerts on a clock the test moves, its flush run
@@ -46,10 +47,14 @@ func (f *fakeMaskAlerts) fire(t *testing.T) {
 func mask(t *testing.T, text, agent string) maskrec.Record {
 	t.Helper()
 	var vals []maskrec.Value
-	o := redact.Options{Secrets: true, Personal: true, Seen: func(h redact.Hit) {
+	out, hits, _, err := privacyengine.Preview(t.Context(), settings.Settings{Redact: true, RedactPersonal: true, RedactModelOff: true}, text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := len(hits)
+	for _, h := range hits {
 		vals = append(vals, maskrec.Value{Placeholder: h.Placeholder, Kind: h.Kind, By: h.By, Head: h.Head, Len: h.Len, Action: h.Action})
-	}}
-	out, n := redact.Mask(text, o)
+	}
 	if n == 0 {
 		t.Fatalf("nothing masked in %q", text)
 	}

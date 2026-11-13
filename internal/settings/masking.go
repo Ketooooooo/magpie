@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // How many values the masking allowlist may hold, and how long each.
@@ -57,4 +57,17 @@ func redactAllow(vs []string) ([]string, error) {
 		return nil, fmt.Errorf("the masking lets at most %d values go", maxAllow)
 	}
 	return out, nil
+}
+
+// EditBuiltinPrivacy updates the current built-in settings under the settings lock.
+func EditBuiltinPrivacy(edit func(*Settings) error) error {
+	defer lockFile()()
+	s, err := loadChecked()
+	if err != nil {
+		return err
+	}
+	if err := edit(&s); err != nil {
+		return err
+	}
+	return save(s, false)
 }

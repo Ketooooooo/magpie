@@ -11,7 +11,7 @@ import (
 
 	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/pii/guard"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // AstrLink Guard (QuantumNous/astrlink-guard, Apache-2.0) is the second

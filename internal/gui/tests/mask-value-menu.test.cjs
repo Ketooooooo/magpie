@@ -2,7 +2,7 @@
 // Insights › Masking, a request opened: a masked value in its text, as
 // written here or as the vendor got it, opens a menu (yew_fence on
 // Discord): Copy copies what the value was, and Never mask puts it on
-// Settings › Privacy's Never mask list through /api/masking/allow, so the
+// Settings › Privacy's Never mask list through /api/masking/record-action, so the
 // next request sends it as written. A value already there, or one of the
 // user's own Masked words, says why Never mask is off. A value from
 // before a restart has nothing to copy and opens nothing. A click scrolls
@@ -24,6 +24,7 @@ const SENT = JSON.stringify({ model: "claude-opus-4-1", messages: [
 ] });
 const records = [
   { key: K2, t: ago(120e3), route: "messages", what: "chat", agent: "claude", provider: "anthropic", model: "claude-opus-4-1", n: 2, took: 1800,
+    actions: [KEY, WORD].map(p => ({ id: "never-mask:" + p, label: "Never mask", placeholder: p, disabledReason: p === WORD ? "One of your Masked words" : undefined })),
     values: [{ p: KEY, k: "API_KEY", b: "rule", h: "sk-p", l: 24, n: 1, known: true }, { p: WORD, k: "WORD", b: "word", h: "N", l: 8, n: 1, known: true }],
     snips: { [KEY]: `export OPENAI_API_KEY=${KEY}`, [WORD]: `# project ${WORD}` } },
   // from before a restart: no values in memory
@@ -41,8 +42,9 @@ function serve(lang, asked) {
     if (url.pathname === "/api/state") return json({ agents: [{ id: "claude", name: "Claude Code", icon: "claudecode-color", fields: [] }], profiles: [], settings });
     if (url.pathname === "/api/settings") return json(settings);
     if (url.pathname === "/api/copy") { asked.push("copy " + JSON.parse(req.postData()).text); return route.fulfill({ status: 204, body: "" }); }
-    if (url.pathname === "/api/masking/allow") {
-      const p = JSON.parse(req.postData()).p;
+    if (url.pathname === "/api/masking/record-action") {
+      const { recordKey, actionId } = JSON.parse(req.postData());
+      const p = recordKey === K2 && actionId === "never-mask:" + KEY ? KEY : "";
       asked.push("allow " + p);
       if (p !== KEY) return route.fulfill({ status: 404, body: "404 page not found" });
       settings.redactAllow = [...settings.redactAllow, SECRET];

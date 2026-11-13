@@ -654,7 +654,7 @@ function maskValueList(box, sum) {
 function maskOneOpen(key, r) {
   if (!key) return;
   maskTipOff();
-  const o = maskO = { key, r: r || maskL.records.find((x) => x.key === key) || null, sent: undefined, leaves: null, vals: new Map(), view: "both", pick: "", open: new Set(), whole: new Set() };
+  const o = maskO = { key, r: r || maskL.records.find((x) => x.key === key) || null, sent: undefined, leaves: null, vals: new Map(), view: "both", pick: "", open: new Set(), whole: new Set(), appliedActions: new Set(), pendingActions: new Set() };
   $("#maskCard").hidden = $("#maskList").hidden = $("#maskDemo").hidden = true;
   xqd?.wake();
   $("#maskOne").hidden = false;
@@ -665,7 +665,7 @@ function maskOneOpen(key, r) {
       o.r = rec;
       drawMaskOne();
       const ps = (rec.values || []).filter((x) => x.known).map((x) => x.p);
-      const vals = ps.length ? api("masking/values", { ps }).then((x) => {
+      const vals = ps.length ? api("masking/values", { recordKey: rec.key, ps }).then((x) => {
         for (const [p, v] of Object.entries(x?.values || {})) { o.vals.set(p, v); maskValues.set(p, v); }
       }).catch(() => {}) : null;
       const sent = api("masking/sent?key=" + key).then((x) => (typeof x?.body === "string" ? x.body : null), () => null);
@@ -750,7 +750,7 @@ function drawMaskOne() {
   if (r.what && r.what !== "chat") who.append(el("span", "msk-chip", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
   card.append(who, maskSteps(r, o));
   box.append(card);
-  if (r.blocked) box.append(maskBlocked(r));
+  if (r.blocked) box.append(maskBlocked(r, o));
 
   const grid = el("div", "msk-onegrid");
   grid.append(maskContent(r, o, info), maskHow(r, o, info));
@@ -787,38 +787,54 @@ function maskSteps(r, o) {
 }
 
 // a request held back: why, and the way to send it masked instead
-function maskBlocked(r) {
+function maskBlocked(r, o) {
   const box = el("section", "msk-blocked");
   const head = el("div", "msk-bhead"), ic = svg(SHIELD, 20, 1.3);
   ic.append(sv("path", { d: "m6 6 4 4M10 6l-4 4" }));
   head.append(ic, el("h2", "", t("This request was not sent")));
   const kinds = [...new Set((r.values || []).filter((x) => x.a === "block").map((x) => x.k))];
   const labels = kinds.map(maskKindName).join(", ") || t("a value");
-  if (r.engine && r.engine !== "magpie") {
-    box.append(head, el("p", "", t("{engine} blocked this request because it contained {kinds}.", { engine: maskEngineName(r), kinds: labels })));
-    return box;
-  }
+  const external = r.engine && r.engine !== "magpie";
   const a = maskWho(r.agent, "agent").name, p = r.provider ? maskWho(r.provider, "provider").name : t("A vendor");
-  box.append(head, el("p", "", t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: labels, provider: p, agent: r.agent ? a : t("The agent") })));
+  box.append(head, el("p", "", external
+    ? t("{engine} blocked this request because it contained {kinds}.", { engine: maskEngineName(r), kinds: labels })
+    : t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: labels, provider: p, agent: r.agent ? a : t("The agent") })));
   const tools = el("div", "msk-btools");
-  if (kinds.length) {
-    const b = el("button", "text primary", t("Mask it instead"));
+  for (const action of r.actions || []) {
+    const b = el("button", "text primary");
+    const label = action.scope ? t(action.label) + " · " + action.scope : t(action.label);
+    const saved = () => { b.textContent = t("Saved"); b.disabled = true; };
     b.type = "button";
-    b.title = t("From now on {kinds} go to vendors as placeholders, like the other values", { kinds: kinds.map(maskKindName).join(", ") });
+    b.textContent = label;
+    if (o.appliedActions.has(action.id)) saved();
+    else b.disabled = o.pendingActions.has(action.id) || !!action.disabledReason;
+    if (action.disabledReason) b.title = t(action.disabledReason);
     b.onclick = () => {
+      o.pendingActions.add(action.id);
       b.disabled = true;
-      (prefs ? Promise.resolve() : loadSettings())
-        .then(() => writingPrefs(api("settings/redact-actions", { actions: { ...(prefs.redactActions || {}), ...Object.fromEntries(kinds.map((k) => [k, "mask"])) } })))
-        .then((ns) => { prefs = ns; if (state) state.settings = ns; b.textContent = t("Masked from now on"); status(t("Saved"), "ok", 1500); })
-        .catch((e) => { b.disabled = false; status(t(e.message), "err"); });
+      writingPrefs(api("masking/record-action", { recordKey: r.key, actionId: action.id }))
+        .then((ns) => {
+          prefs = ns;
+          if (state) state.settings = ns;
+          o.appliedActions.add(action.id);
+          saved();
+          status(t("Saved. Resend the request to use the updated privacy settings."), "ok");
+        })
+        .catch((e) => { b.disabled = false; status(t(e.message), "err"); })
+        .finally(() => {
+          o.pendingActions.delete(action.id);
+          if (maskO === o && !b.isConnected) drawMaskOne();
+        });
     };
     tools.append(b);
   }
-  const rules = el("button", "text", t("See the rules in Settings"));
-  rules.type = "button";
-  rules.onclick = (e) => openSettingsAt(e, "privacy", $("#maskActList"));
-  tools.append(rules);
-  box.append(tools);
+  if (!external) {
+    const rules = el("button", "text", t("See the rules in Settings"));
+    rules.type = "button";
+    rules.onclick = (e) => openSettingsAt(e, "privacy", $("#maskActList"));
+    tools.append(rules);
+  }
+  if (tools.childNodes.length) box.append(tools);
   return box;
 }
 
@@ -863,7 +879,7 @@ function maskActsOn(mark, x, o) {
   };
 }
 // maskValueMenu: Copy puts the value itself on the clipboard; Never mask
-// adds it to Settings › Privacy's list of that name (/api/masking/allow,
+// adds it to Settings › Privacy's list of that name (the record action,
 // the same list), so new messages send it as written while the ones sent
 // before stay masked and the vendor's cache of them still matches
 // (redact's allowkept.go, NicoleS76448271 on X). A value of the user's
@@ -877,14 +893,15 @@ function maskValueMenu(anchor, x, o) {
   if (typeof v !== "string") return;
   const s = prefs || state?.settings || {};
   const had = (s.redactAllow || []).some((a) => a.trim().toLowerCase() === v.trim().toLowerCase());
-  const why = x.b === "word" ? t("One of your Masked words") : had ? t("In Never mask already") : "";
+  const allow = (o.r.actions || []).find((a) => a.placeholder === x.p);
+  const why = allow?.disabledReason ? t(allow.disabledReason) : had ? t("In Never mask already") : "";
   openRowMenu(anchor, [
     { name: "Copy", icon: COPY_ICON, run: () => copy(v, "", null, t("Value copied")) },
-    { name: "Never mask", icon: EYE, off: !!why, why, run: () => {
-      writingPrefs(api("masking/allow", { p: x.p }))
+    ...(allow ? [{ name: allow.label, icon: EYE, off: !!why, why, run: () => {
+      writingPrefs(api("masking/record-action", { recordKey: o.r.key, actionId: allow.id }))
         .then((ns) => { prefs = ns; if (state) state.settings = ns; status(t("Sent as written in new messages; earlier ones stay masked, so the cache still holds"), "ok"); })
         .catch((e) => status(t(e.message), "err"));
-    } },
+    } }] : []),
   ]);
 }
 

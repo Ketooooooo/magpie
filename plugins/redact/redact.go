@@ -13,8 +13,6 @@ import (
 	"slices"
 
 	"github.com/yetone/magpie/internal/access"
-	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/pluginrt"
 	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/settings"
@@ -31,7 +29,7 @@ func init() {
 		Parts:  []pluginrt.Part{{Slot: "nav.page", Key: "masking"}},
 		Client: []string{"i18n.js", "redact.css", "client.js", "page.js"},
 		Apply: func(c *pluginrt.Ctx) error {
-			c.OnDispose(gwmw.Mask(masking.Masker{}))
+			c.OnDispose(privacyengine.EnableBuiltin())
 			return nil
 		},
 	})

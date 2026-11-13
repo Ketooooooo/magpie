@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,7 +13,6 @@ import (
 	"github.com/yetone/magpie/internal/gwbudget"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/gwtool"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/routes"
@@ -146,14 +146,14 @@ var rotation []func()
 var masked, chained func()
 
 func serveMiddleware() {
-	masked = gwmw.Mask(masking.Masker{})
+	masked = privacyengine.EnableBuiltin()
 	chained = gwmw.Use(middleware.Chain{})
 }
 
 // withoutMasker takes the masker away for t, as plugins/redact off does.
 func withoutMasker(t *testing.T) {
 	masked()
-	t.Cleanup(func() { masked = gwmw.Mask(masking.Masker{}) })
+	t.Cleanup(func() { masked = privacyengine.EnableBuiltin() })
 }
 
 // withoutMiddleware takes the JS middleware chain away for t, as
@@ -218,4 +218,10 @@ func withoutSearch(t *testing.T) {
 		stop()
 		searchOn = gwtool.Serve(gwtool.WebSearch)
 	})
+}
+
+type builtinMasker interface {
+	gwmw.Masker
+	gwmw.Teller
+	gwmw.ContextTeller
 }

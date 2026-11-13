@@ -48,5 +48,6 @@ func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 			return ctx, &pluginMasker{ctx: ctx, name: spec.Name, begin: begin}, nil
 		},
 		preview: preview,
+		actions: hostedActions{target: target, directory: directory, spec: spec},
 	}
 }

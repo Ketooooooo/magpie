@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"unicode/utf8"
 
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // Find is redact's Model: what the model finds in each of texts. A

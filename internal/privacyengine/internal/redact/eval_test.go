@@ -13,8 +13,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yetone/magpie/internal/pii"
-	"github.com/yetone/magpie/internal/redact"
+	"github.com/yetone/magpie/internal/privacyengine/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine/internal/redact"
 )
 
 // The masking evaluation: made-up texts of the kinds agents send (prose,

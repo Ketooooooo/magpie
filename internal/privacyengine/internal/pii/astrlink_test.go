@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/pii/guard"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // guardSandbox gives AstrLink Guard a folder of the test's own, and

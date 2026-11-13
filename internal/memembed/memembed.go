@@ -33,8 +33,8 @@ import (
 	"github.com/yetone/magpie/internal/edit"
 	"github.com/yetone/magpie/internal/filelock"
 	"github.com/yetone/magpie/internal/memory"
-	"github.com/yetone/magpie/internal/pii"
 	"github.com/yetone/magpie/internal/pii/guard"
+	"github.com/yetone/magpie/internal/privacyengine"
 )
 
 // rev is the repo's revision the files below were hashed at.
@@ -255,7 +255,7 @@ func fetchModel(ctx context.Context) error {
 					}
 				}
 			}()
-			err := pii.Fetch(ctx, base+rev+"/"+f.path, path, f.size, f.sha, &n)
+			err := privacyengine.FetchModelAsset(ctx, base+rev+"/"+f.path, path, f.size, f.sha, &n)
 			close(stop)
 			if err != nil {
 				return fmt.Errorf("downloading %s: %w", filepath.Base(f.path), err)

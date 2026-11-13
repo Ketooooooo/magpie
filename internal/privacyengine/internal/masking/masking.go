@@ -17,13 +17,19 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/pii"
-	"github.com/yetone/magpie/internal/redact"
+	"github.com/yetone/magpie/internal/privacyengine/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 
-// Masker masks as the settings say, read on each call.
+// Masker masks using the settings pinned to the request context.
 type Masker struct{}
+
+type settingsKey struct{}
+
+func WithSettings(ctx context.Context, settings settings.Settings) context.Context {
+	return context.WithValue(ctx, settingsKey{}, settings)
+}
 
 // Wanted says settings st ask for anything to be masked.
 func Wanted(st settings.Settings) bool {
@@ -55,7 +61,10 @@ func WithForced(ctx context.Context) context.Context {
 // optionsCtx is options with the model's wait ending with ctx, for the
 // route ctx has (WithRoute).
 func optionsCtx(ctx context.Context) redact.Options {
-	st := settings.Shared()
+	st, pinned := ctx.Value(settingsKey{}).(settings.Settings)
+	if !pinned {
+		st = settings.Shared()
+	}
 	o := redact.Options{Secrets: st.Redact, Personal: st.RedactPersonal, Kinds: st.RedactKinds, Words: st.RedactWords, WordsAnyCase: st.RedactWordsAnyCase, WordsWhole: st.RedactWordsWhole, Rules: st.RedactRules,
 		Actions: st.RedactActions, Allow: st.RedactAllow, Shape: st.RedactShape}
 	o.Route, _ = ctx.Value(routeKey{}).(string)

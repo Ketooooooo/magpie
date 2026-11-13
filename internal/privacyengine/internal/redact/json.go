@@ -566,19 +566,18 @@ func typeOf(data []byte) string {
 }
 
 // RestoreJSON puts the values back in a response body.
-func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil) }
+func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil, nil) }
 
-// restoreJSON is RestoreJSON, counting in put as restore does.
-func restoreJSON(body []byte, put map[string]int) []byte {
+func restoreJSON(body []byte, put map[string]int, allowed map[string]struct{}) []byte {
 	if !heldIn(body) && !hasShapes(body) {
 		return body
 	}
 	typ := typeOf(body)
 	out, ok := walk(body, func(path, key, s string) string {
-		return restore(s, asJSON(key, typ), put)
+		return restore(s, asJSON(key, typ), put, allowed)
 	})
 	if !ok {
-		return []byte(restore(string(body), false, put))
+		return []byte(restore(string(body), false, put, allowed))
 	}
 	return out
 }

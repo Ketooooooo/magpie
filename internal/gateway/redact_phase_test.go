@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -76,7 +77,7 @@ func TestMaskingIsAPhaseWithItsTime(t *testing.T) {
 	m := heldMasker{let: make(chan struct{}), entered: make(chan struct{}), once: new(sync.Once)}
 	var letOnce sync.Once
 	let := func() { letOnce.Do(func() { close(m.let) }) }
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 
 	s := New()
 	srv := httptest.NewServer(s.Handler())
@@ -181,7 +182,7 @@ func TestMaskingTimeKeptWhenOwnIsUnknown(t *testing.T) {
 	}))
 	withoutMasker(t)
 	m := heldMasker{let: make(chan struct{}), entered: make(chan struct{}), once: new(sync.Once)}
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 	const hold = 120 * time.Millisecond
 	go func() {
 		<-m.entered

@@ -128,15 +128,16 @@ func (s *Server) askOwnSearch(ctx context.Context, p provider.Provider, where, q
 }
 
 // kimiSearch asks a Kimi Code plan's search service.
-func (s *Server) kimiSearch(ctx context.Context, p provider.Provider, query string) (string, []Hit, error) {
+func (s *Server) kimiSearch(ctx context.Context, p provider.Provider, query string) (said string, hits []Hit, err error) {
 	// the service gives itself 30 s, as kimi-cli asks
 	// through the plan's own proxy, if it has one (#237, #1522)
 	ctx, cancel := context.WithTimeout(s.metered(p.Via(ctx), p, ""), searchTimeout/2)
 	defer cancel()
-	q, err := maskedQuery(ctx, query, &p)
+	q, session, err := maskedQuery(ctx, query, &p)
 	if err != nil {
 		return "", nil, err
 	}
+	defer finishSearchPrivacy(ctx, session, &said, &err)
 	body, _ := json.Marshal(map[string]any{"text_query": q, "limit": searchCount(ctx), "enable_page_crawling": false, "timeout_seconds": 30})
 	r, err := http.NewRequestWithContext(ctx, http.MethodPost, provider.KimiCodeSearch(p), bytes.NewReader(body))
 	if err != nil {
@@ -195,6 +196,6 @@ func (s *Server) kimiSearch(ctx context.Context, p provider.Provider, query stri
 	if len(pages) == 0 {
 		return "", nil, fmt.Errorf("%s %w", p.Name, errFoundNothing)
 	}
-	said, hits := pagesSaid(pages)
+	said, hits = pagesSaid(pages)
 	return said, hits, nil
 }

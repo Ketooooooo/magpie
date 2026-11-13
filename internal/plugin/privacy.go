@@ -65,6 +65,15 @@ func PreviewPrivacy(ctx context.Context, target string, spec PrivacySpec, direct
 	return Call(ctx, "privacyPreview", params, output)
 }
 
+// ApplyPrivacyRecordAction sends an action selected in a masking record to its engine.
+func ApplyPrivacyRecordAction(ctx context.Context, target string, spec PrivacySpec, directory string, input any) error {
+	params, err := privacyParams(target, spec, directory, input)
+	if err != nil {
+		return err
+	}
+	return Call(ctx, "privacyRecordAction", params, nil)
+}
+
 func privacyParams(target string, spec PrivacySpec, directory string, input any) (map[string]any, error) {
 	root, err := os.OpenRoot(target)
 	if err != nil {

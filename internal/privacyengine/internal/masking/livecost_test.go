@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yetone/magpie/internal/pii"
-	"github.com/yetone/magpie/internal/redact"
+	"github.com/yetone/magpie/internal/privacyengine/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine/internal/redact"
 )
 
 // TestLiveHistoryCost measures what the default's local model (AstrLink
