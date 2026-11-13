@@ -60,10 +60,12 @@ function serve(lang, asked) {
     if (url.pathname === "/api/masking/sent") return url.searchParams.get("key") === K2 ? json({ body: SENT }) : route.fulfill({ status: 404, body: "404 page not found" });
     if (url.pathname === "/api/masking/values") {
       const known = { [KEY]: SECRET, [WORD]: NIGHTJAR };
-      const ps = JSON.parse(req.postData()).ps;
+      const { recordKey, ps } = JSON.parse(req.postData());
+      const record = (records).find(r => r.key === recordKey);
+      assert(record, "original-value lookup must be tied to a record");
+      assert(ps.every(p => record.values.some(v => v.p === p)), "placeholder must belong to the record");
       return json({ values: Object.fromEntries(ps.filter((p) => known[p]).map((p) => [p, known[p]])) });
     }
-    if (url.pathname === "/api/masking/value") return url.searchParams.get("p") === KEY ? json({ value: SECRET }) : route.fulfill({ status: 404, body: "404 page not found" });
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);
     const contentType = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".png": "image/png" }[path.extname(file)];

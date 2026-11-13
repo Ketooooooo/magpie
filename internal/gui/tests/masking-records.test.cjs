@@ -43,8 +43,8 @@ function summary(days) {
     agents: [{ name: "claude", n: 30, distinct: 8 }, { name: "codex", n: 12, distinct: 3 }],
     providers: [{ name: "anthropic", n: 30, distinct: 8 }, { name: "openai", n: 12, distinct: 3 }],
     values: [
-      { p: KEY, kind: "API_KEY", by: "rule", head: "sk-p", len: 24, n: 14, requests: 5, last: ago(60e3) },
-      { p: NAME, kind: "PERSON", by: "model", head: "", len: 3, n: 6, requests: 3, last: ago(3600e3) },
+      { p: KEY, recordKey: K2, kind: "API_KEY", by: "rule", head: "sk-p", len: 24, n: 14, requests: 5, last: ago(60e3) },
+      { p: NAME, recordKey: K1, kind: "PERSON", by: "model", head: "", len: 3, n: 6, requests: 3, last: ago(3600e3) },
     ],
     since: ago(7 * 86400e3),
   };
@@ -122,13 +122,15 @@ function serve(lang, sum, asked, opts = {}) {
     }
     if (url.pathname === "/api/masking/values") {
       const known = { [KEY]: SECRET, [MAIL]: ADDR, ...opts.known };
-      const ps = JSON.parse(req.postData()).ps;
+      const { recordKey, ps } = JSON.parse(req.postData());
+      const record = (opts.records || records).find(r => r.key === recordKey);
+      assert(record, "original-value lookup must be tied to a record");
+      assert(ps.every(p => record.values.some(v => v.p === p)), "placeholder must belong to the record");
       asked.push("values " + ps.join(","));
       return json({ values: Object.fromEntries(ps.filter((p) => known[p]).map((p) => [p, known[p]])) });
     }
     if (url.pathname === "/api/masking/value") {
-      asked.push("value " + url.searchParams.get("p"));
-      return url.searchParams.get("p") === KEY ? json({ value: SECRET }) : route.fulfill({ status: 404, body: "404 page not found" });
+      assert.fail("placeholder-only lookup is no longer supported");
     }
     if (url.pathname.startsWith("/api/")) return json({});
     const file = path.join(assets, url.pathname === "/" ? "index.html" : url.pathname);

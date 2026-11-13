@@ -624,6 +624,11 @@ function maskRecordRow(r) {
   return row;
 }
 
+function maskRecordValues(recordKey, ps) {
+  if (!recordKey || !ps.length) return Promise.resolve({});
+  return api("masking/values", { recordKey, ps }).then((result) => result?.values || {}, () => ({}));
+}
+
 // the values masked most, as the summary ranks them: what a facet can
 // narrow them by; one opens the requests with its kind
 function maskValueList(box, sum) {
@@ -643,7 +648,7 @@ function maskValueList(box, sum) {
     const kind = el("span", "k");
     kind.append(maskDot(v.kind), el("span", "", maskKindName(v.kind)));
     c.append(el("span", "i", String(i + 1).padStart(2, "0")), el("span", "sh", sh), kind, el("span", "by", maskByName(v.by)), bar, el("span", "x", fmtN(v.n)));
-    maskTipOn(c, { p: v.p, kind: v.kind, by: v.by, meta: t(v.requests === 1 ? "In 1 request, {when}" : "In {n} requests, most recently {when}", { n: fmtN(v.requests), when: ago(v.last) }) });
+    maskTipOn(c, { value: () => maskRecordValues(v.recordKey, [v.p]).then(values => values[v.p] ?? null), kind: v.kind, by: v.by, meta: t(v.requests === 1 ? "In 1 request, {when}" : "In {n} requests, most recently {when}", { n: fmtN(v.requests), when: ago(v.last) }) });
     c.onclick = () => { maskL.mode = "req"; maskNarrow({ kind: v.kind, facet: "" }); };
     list.append(c);
   }
@@ -665,9 +670,7 @@ function maskOneOpen(key, r) {
       o.r = rec;
       drawMaskOne();
       const ps = (rec.values || []).filter((x) => x.known).map((x) => x.p);
-      const vals = ps.length ? api("masking/values", { recordKey: rec.key, ps }).then((x) => {
-        for (const [p, v] of Object.entries(x?.values || {})) { o.vals.set(p, v); maskValues.set(p, v); }
-      }).catch(() => {}) : null;
+      const vals = maskRecordValues(rec.key, ps).then(values => { o.vals = new Map(Object.entries(values)); });
       const sent = api("masking/sent?key=" + key).then((x) => (typeof x?.body === "string" ? x.body : null), () => null);
       return Promise.all([sent, vals]).then(([body]) => {
         if (maskO !== o) return;
@@ -846,14 +849,13 @@ function maskInk(into, text, here, o, info) {
     const x = info.get(m[0]);
     if (!x) continue;
     into.append(document.createTextNode(text.slice(at, m.index)));
-    let mark;
-    if (here) {
-      const v = o.vals.get(m[0]);
-      mark = el("mark", "msk-orig" + (typeof v === "string" ? "" : " gone"), typeof v === "string" ? v : maskShape(x.h, x.l));
-      mark.style.setProperty("--k", maskColor(x.k));
-      mark.tabIndex = 0;
-      maskTipOn(mark, { p: m[0], kind: x.k, by: x.b });
-    } else mark = maskPlace("msk-ph", m[0], x);
+    const value = o.vals.get(m[0]);
+    const known = typeof value === "string";
+    const mark = el("mark", here ? "msk-orig" + (known ? "" : " gone") : "msk-ph",
+      here ? (known ? value : maskShape(x.h, x.l)) : m[0]);
+    mark.style.setProperty("--k", maskColor(x.k));
+    mark.tabIndex = 0;
+    maskTipOn(mark, { value: () => value ?? null, kind: x.k, by: x.b });
     mark.dataset.p = m[0];
     maskActsOn(mark, x, o);
     into.append(mark);

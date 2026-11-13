@@ -54,6 +54,15 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	if get("/api/masking/summary?days=7", &sum); sum.Requests < 2 || len(sum.Days) != 7 {
 		t.Fatalf("summary %+v", sum)
 	}
+	found := false
+	for _, value := range sum.Values {
+		if value.Placeholder == p {
+			found = value.RecordKey == rec.Key
+		}
+	}
+	if !found {
+		t.Fatal("masking summary must identify the record for its value preview")
+	}
 	var page struct {
 		Records []maskedRecord `json:"records"`
 		More    bool           `json:"more"`
