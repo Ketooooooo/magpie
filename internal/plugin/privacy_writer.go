@@ -1,12 +1,10 @@
-package privacyengine
+package plugin
 
 import (
 	"bytes"
 	"errors"
 	"net/http"
 	"strings"
-
-	"github.com/yetone/magpie/internal/plugin"
 )
 
 type replyInput struct {
@@ -25,7 +23,7 @@ type replyOutput struct {
 // that protected the request. The plugin owns the response format.
 type pluginWriter struct {
 	w                                http.ResponseWriter
-	stream                           *plugin.PrivacyStream
+	stream                           *privacyStream
 	present, bypass, started, failed bool
 	contentType                      string
 	put                              map[string]int

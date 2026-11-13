@@ -9,7 +9,6 @@ import (
 
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/maskrec"
-	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -33,12 +32,11 @@ func BlockedRecordActions(record maskrec.Record, hits []gwmw.Hit) []gwmw.RecordA
 }
 
 type hostedActions struct {
-	target, directory string
-	spec              plugin.PrivacySpec
+	applyAction func(context.Context, gwmw.RecordAction) error
 }
 
 func (h hostedActions) apply(ctx context.Context, action gwmw.RecordAction) error {
-	return plugin.ApplyPrivacyRecordAction(ctx, h.target, h.spec, h.directory, action)
+	return h.applyAction(ctx, action)
 }
 
 func (hostedActions) offers(_ maskrec.Record, hits []gwmw.Hit) []gwmw.RecordAction {

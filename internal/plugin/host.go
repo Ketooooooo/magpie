@@ -1863,8 +1863,8 @@ func (h *host) call(ctx context.Context, method string, params, out any) error {
 	}
 }
 
-// Call starts the host if need be and asks it method.
-func Call(ctx context.Context, method string, params, out any) error {
+// callHost starts the host if need be and asks it method.
+func callHost(ctx context.Context, method string, params, out any) error {
 	return callWithTimeout(ctx, method, params, out, 0)
 }
 

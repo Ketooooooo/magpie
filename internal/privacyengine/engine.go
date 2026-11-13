@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -50,9 +49,9 @@ func (r registry) register(e engine) {
 func registered() registry {
 	r := registry{}
 	r.register(nativeEngine())
-	for _, entry := range plugin.Load().Plugins {
-		if spec, _ := plugin.Privacy(plugin.Target(entry.Spec)); spec != nil {
-			r.register(hostedEngine(entry, *spec))
+	if loadHostedEngines != nil {
+		for _, hosted := range loadHostedEngines() {
+			r.register(hostedEngine(hosted))
 		}
 	}
 	return r

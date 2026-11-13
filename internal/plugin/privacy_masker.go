@@ -1,4 +1,4 @@
-package privacyengine
+package plugin
 
 import (
 	"context"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/plugin"
 )
 
 type engineInput struct {
@@ -22,9 +21,8 @@ type protectedInput struct {
 
 type pluginMasker struct {
 	ctx    context.Context
-	name   string
-	begin  func(context.Context, engineInput, *protectedInput) (*plugin.PrivacyStream, error)
-	stream *plugin.PrivacyStream
+	begin  func(context.Context, engineInput, *protectedInput) (*privacyStream, error)
+	stream *privacyStream
 }
 
 func (m *pluginMasker) protect(ctx context.Context, in engineInput) protectedInput {
@@ -110,5 +108,3 @@ func (m *pluginMasker) Close() {
 }
 
 var _ gwmw.ContextTeller = (*pluginMasker)(nil)
-
-func (m *pluginMasker) PrivacyName() string { return m.name }

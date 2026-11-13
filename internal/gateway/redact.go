@@ -88,9 +88,10 @@ func markModelPrivacy(r *http.Request) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), modelPrivacyKey{}, true))
 }
 
-// checkModelPrivacy guards the common model attempt, including fallbacks and
-// provider plugins. A protected request must have completed its privacy step
-// or been routed to a destination the user exempted.
+// checkModelPrivacy detects a missing privacy step on the common model
+// attempt, including fallbacks and provider plugins. The context marker
+// records that the step ran or that routing allowed an exemption. It
+// does not validate the body after later rewrites.
 func checkModelPrivacy(ctx context.Context) error {
 	if ready, _ := ctx.Value(modelPrivacyKey{}).(bool); !ready && redactionWantedFor(ctx) {
 		return errors.New("This model request did not complete privacy protection; nothing was sent")

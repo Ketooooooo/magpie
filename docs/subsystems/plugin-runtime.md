@@ -223,8 +223,18 @@ Agent middleware and privacy protection sit at separate gateway boundaries.
 | Part | What it does | Source |
 | --- | --- | --- |
 | `gwmw.Agent` | Middleware on an agent's request and reply. `Use` registers it, `Agents` lists it, and `AgentsWanted` refreshes missing middleware when needed. | [gwmw.go](../../internal/gwmw/gwmw.go) |
-| `privacyengine.Session` | `Begin` binds the chosen engine to the request. The session protects JSON or text and restores the reply. Protection failure stops the request. The main model attempt checks for a completed protection step or a user-configured exemption before calling its provider. | [engine.go](../../internal/privacyengine/engine.go), [session.go](../../internal/privacyengine/session.go), [gateway.go](../../internal/gateway/gateway.go) |
+| `privacyengine.Session` | `Begin` binds the chosen engine to the request. The session protects JSON or text and restores the reply. Protection failure stops the request. The main model attempt checks the request context for a completed protection step or a user-configured exemption. | [engine.go](../../internal/privacyengine/engine.go), [session.go](../../internal/privacyengine/session.go), [gateway.go](../../internal/gateway/gateway.go) |
 | Built-in privacy engine | `plugins/redact` enables it for the plugin's lifetime. It uses the request's settings snapshot and may refresh the plugin on demand. Go limits imports of its masker, scanner and local model to the privacy engine tree. The public `policy` package exposes the saved rule format and irreversible scrubbing for Magpie's own logs. | [builtin.go](../../internal/privacyengine/builtin.go), [policy.go](../../internal/privacyengine/policy/policy.go) |
+
+The attempt check catches a skipped protection step on the shared model
+path, including fallbacks and provider plugins. It does not verify the
+bytes after later middleware or protocol rewrites. Codex direct, media,
+and search use separate dispatch paths outside this check.
+
+The Bun host registers its installed privacy engines through
+`privacyengine.HostedEngine`. Its concrete engine, stream and generic RPC
+caller are private to `internal/plugin`. Gateway and GUI code access the
+registered engines through `privacyengine`.
 
 A direct MCP search restores its answer with the session that protected
 its query. Video polls and single Ark task polls restore only placeholders
