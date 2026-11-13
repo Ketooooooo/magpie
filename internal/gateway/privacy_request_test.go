@@ -31,28 +31,34 @@ func TestHostedPrivacyRequestBatchAndCapture(t *testing.T) {
 	t.Cleanup(plugin.Settle)
 	t.Cleanup(archivePending.Wait)
 	files := map[string]string{
-		"package.json": `{"name":"batch-privacy","magpie":{"privacy":{"id":"batch-privacy","name":"Batch privacy","protocol":"message-v1","entry":"privacy.mjs"}}}`,
+		"package.json": `{"name":"batch-privacy","magpie":{"privacy":{"id":"batch-privacy","name":"Batch privacy","protocol":"body-v1","entry":"privacy.mjs"}}}`,
 		"privacy.mjs": `
 import { appendFileSync } from "node:fs";
 const values = new Map([["` + first + `","` + firstMask + `"], ["` + second + `","` + secondMask + `"]]);
-export function preview(fragments) {
+export function preview({body, texts}) {
   const hits = [];
-  const texts = fragments.map(({text}) => {
-    const mask = values.get(text);
-    if (mask) hits.push({kind: "FIELD", placeholder: mask});
-    return mask ?? text;
-  });
-  return {texts, hits, restore: hits.length > 0};
+  const mask = text => {
+    for (const [value, token] of values) if (text.includes(value)) {
+      hits.push({kind: "FIELD", placeholder: token});
+      text = text.replaceAll(value, token);
+    }
+    return text;
+  };
+  const result = body ? {body: mask(body)} : {texts: texts.map(mask)};
+  return {...result, hits, restore: hits.length > 0};
 }
-export function begin(fragments) {
-  appendFileSync(new URL("./batches", import.meta.url), fragments.length + "\n");
-  const request = preview(fragments);
-  const originals = new Map([...values].map(([value, mask]) => [mask, value]));
-  return {request: () => request, reply: fields => fields.map(({text}) => ({
-    text: originals.get(text) ?? text,
-    restorations: originals.has(text) ? {[text]:originals.get(text)} : {},
-  }))};
+export function begin(input) {
+  const request = preview(input);
+  appendFileSync(new URL("./batches", import.meta.url), request.hits.length + "\n");
+  let buffer = "";
+  return {request: () => request, reply: ({data, finish}) => {
+    if (data) buffer += Buffer.from(data, "base64").toString();
+    if (!finish) return {};
+    for (const [value, token] of values) buffer = buffer.replaceAll(token, value);
+    return {data: Buffer.from(buffer).toString("base64")};
+  }};
 }
+
 `,
 	}
 	for name, content := range files {

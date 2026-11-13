@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/responsesstream"
 )
 
 // Models write a whole number in a tool call's arguments with a fraction
@@ -331,8 +330,10 @@ func (t *intTidy) responses(ev map[string]any) bool {
 // callKeyOf is the key a Responses argument event's call is streamed under:
 // its item id, or where it is in the output.
 func callKeyOf(ev map[string]any) string {
-	id, _ := ev["item_id"].(string)
-	return responsesstream.CallKey(id, jsonText(ev["output_index"]))
+	if id, _ := ev["item_id"].(string); id != "" {
+		return id
+	}
+	return "#" + jsonText(ev["output_index"])
 }
 
 func jsonText(v any) string {

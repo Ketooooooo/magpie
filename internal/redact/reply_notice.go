@@ -2,67 +2,17 @@ package redact
 
 import (
 	"bytes"
-	"slices"
-	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/tidwall/gjson"
 )
 
 const (
 	replyNoticeTarget    = "#magpie-privacy-notice"
-	replyNoticeHeading   = "🔒 Magpie masked the following values before sending them to the model."
 	replyNoticeListStart = "- ["
 	replyNoticeLinkStart = "](" + replyNoticeTarget + ` "`
 	replyNoticeLinkEnd   = `")`
 )
-
-// FormatReplyNotice shows restored originals as links with their masks as
-// hover titles. The fixed local target identifies this display-only suffix.
-func FormatReplyNotice(values map[string]string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	masks := make([]string, 0, len(values))
-	for mask := range values {
-		masks = append(masks, mask)
-	}
-	slices.Sort(masks)
-	var out strings.Builder
-	out.WriteString("\n\n" + replyNoticeHeading + "\n")
-	for _, mask := range masks {
-		out.WriteString("\n" + replyNoticeListStart)
-		writeNoticeText(&out, values[mask], false)
-		out.WriteString(replyNoticeLinkStart)
-		writeNoticeText(&out, mask, true)
-		out.WriteString(replyNoticeLinkEnd)
-	}
-	return out.String()
-}
-
-// Entities keep arbitrary labels and masks within one link. Line breaks
-// and tabs are shown explicitly so they do not end the notice or hide text.
-func writeNoticeText(out *strings.Builder, text string, title bool) {
-	for _, c := range text {
-		switch c {
-		case '\n':
-			out.WriteRune('⏎')
-		case '\r':
-			out.WriteRune('␍')
-		case '\t':
-			out.WriteRune('⇥')
-		default:
-			if unicode.IsControl(c) {
-				out.WriteRune('�')
-			} else if strings.ContainsRune("&\\<>\"", c) || !title && strings.ContainsRune("[]`*_~", c) {
-				out.WriteString("&#" + strconv.Itoa(int(c)) + ";")
-			} else {
-				out.WriteRune(c)
-			}
-		}
-	}
-}
 
 // StripReplyNotices keeps reply presentation out of assistant history
 // before routing, even when this request uses no masker. Older preview

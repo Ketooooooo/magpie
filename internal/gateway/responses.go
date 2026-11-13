@@ -13,7 +13,6 @@ import (
 	"github.com/tidwall/gjson"
 	"github.com/yetone/magpie/internal/claudeseal"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/responsesstream"
 )
 
 // ---- OpenAI Responses -------------------------------------------------------
@@ -1763,7 +1762,7 @@ func (d *responsesDecoder) endCall(emit func(Event)) {
 	d.calling = false
 	sent := d.sent.String()
 	rest := d.held
-	if args := responsesstream.PickArgs(sent+d.held, d.full); strings.HasPrefix(args, sent) {
+	if args := pickArgs(sent+d.held, d.full); strings.HasPrefix(args, sent) {
 		rest = args[len(sent):]
 	}
 	d.sent.Reset()
@@ -1809,6 +1808,20 @@ func (j *jsonWhole) feed(s string) bool {
 		}
 	}
 	return j.began && j.depth == 0 && !j.str
+}
+
+// pickArgs is the fuller of a call's arguments as streamed and as its done
+// events give them, JSON first.
+func pickArgs(streamed, done string) string {
+	s, f := strings.TrimSpace(streamed), strings.TrimSpace(done)
+	switch sv, fv := json.Valid([]byte(s)), json.Valid([]byte(f)); {
+	case fv && (!sv || len(f) > len(s)):
+		return done
+	case sv || f == "":
+		return streamed
+	default:
+		return done
+	}
 }
 
 func (d *responsesDecoder) decode(data string, emit func(Event)) error {
@@ -1922,7 +1935,7 @@ func (d *responsesDecoder) decode(data string, emit func(Event)) error {
 				}
 			}
 			if ev.Item.Arguments != "" {
-				d.full = string(ev.Item.Arguments)
+				d.full = pickArgs(string(ev.Item.Arguments), d.full)
 			}
 			d.endCall(emit)
 			// the calls whose items ended while the open one streamed go

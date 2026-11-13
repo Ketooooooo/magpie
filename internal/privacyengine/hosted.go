@@ -10,7 +10,6 @@ import (
 
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/plugin"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -23,18 +22,18 @@ func pluginDataPath(identity, id string) string {
 
 func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 	target, directory := plugin.Target(entry.Spec), pluginDataPath(plugin.Name(entry.Spec), spec.ID)
-	begin := func(ctx context.Context, fragments []redact.Fragment, out any) (*plugin.PrivacyStream, error) {
+	begin := func(ctx context.Context, in engineInput, out *protectedInput) (*plugin.PrivacyStream, error) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return nil, err
 		}
-		return plugin.BeginPrivacyStream(ctx, target, spec, directory, fragments, out)
+		return plugin.BeginPrivacyStream(ctx, target, spec, directory, in, out)
 	}
 	preview := func(ctx context.Context, text string) (string, []gwmw.Hit, bool, error) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return "", nil, false, pluginUnavailable
 		}
-		var out protectedFields
-		if err := plugin.PreviewPrivacy(ctx, target, spec, directory, []redact.Fragment{{Text: text, Scope: "user"}}, &out); err != nil || len(out.Texts) != 1 {
+		var out protectedInput
+		if err := plugin.PreviewPrivacy(ctx, target, spec, directory, engineInput{Texts: []string{text}}, &out); err != nil || len(out.Texts) != 1 {
 			return "", nil, false, pluginUnavailable
 		}
 		return out.Texts[0], out.Hits, false, nil
@@ -46,7 +45,7 @@ func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 			return err
 		},
 		begin: func(ctx context.Context, _ settings.Settings, _ bool) (context.Context, gwmw.Masker, error) {
-			return ctx, &pluginMasker{ctx: ctx, name: spec.Name, begin: begin, replyNotice: spec.ReplyNotice}, nil
+			return ctx, &pluginMasker{ctx: ctx, name: spec.Name, begin: begin}, nil
 		},
 		preview: preview,
 	}

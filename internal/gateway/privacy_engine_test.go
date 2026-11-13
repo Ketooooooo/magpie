@@ -16,7 +16,6 @@ import (
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/testenv"
 )
@@ -38,33 +37,57 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatalf("before installation, only Magpie should be listed: %+v", got)
 	}
 	dir := t.TempDir()
-	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"message-v1","entry":"privacy.mjs","replyNotice":true}}}`
+	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"body-v1","entry":"privacy.mjs"}}}`
 	code := `
 import { existsSync } from "node:fs";
 const value = "` + value + `", token = "` + token + `";
-export function preview(fragments) {
+export function preview({body, texts}) {
   if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
   const hits = [];
-  const texts = fragments.map(({text}) => {
+  const mask = text => {
     if (text.includes(value)) hits.push({kind: "EMAIL", placeholder: token});
     return text.replaceAll(value, token);
-  });
-  return {texts, hits, restore: hits.length > 0};
+  };
+  const result = body ? {body: mask(body)} : {texts: texts.map(mask)};
+  return {...result, hits, restore: hits.length > 0};
 }
-export function begin(fragments) {
-  const request = preview(fragments);
-  const pending = new Map();
-  return {request: () => request, reply: (fields) => fields.map(({id,text,finish}) => {
-    const full = (pending.get(id) || "") + text;
-    const start = full.lastIndexOf("[");
-    const maybe = full.lastIndexOf("[[");
-    const at = maybe >= 0 && token.startsWith(full.slice(maybe)) ? maybe : start;
-    const tail = !finish && at >= 0 && full.slice(at) !== token && token.startsWith(full.slice(at)) ? full.slice(at) : "";
-    if (tail) pending.set(id, tail); else pending.delete(id);
-    const ready = full.slice(0, full.length - tail.length);
-    return {text:ready.replaceAll(token,value), restorations:ready.includes(token) ? {[token]:value} : {}};
-  })};
+export function begin(input) {
+  const request = preview(input);
+  const notice = '\n\n🔒 Magpie masked the following values before sending them to the model.\n\n- [' +
+    value + '](#magpie-privacy-notice "' + token + '")';
+  const structured = Boolean(input.body && JSON.parse(input.body).response_format);
+  let buffer = "", tail = "", restored = false;
+  const result = data => ({data: Buffer.from(data).toString("base64"), put: restored ? {[token]:1} : {}});
+  return {request: () => request, reply: ({data, contentType, present, finish}) => {
+    if (data) buffer += Buffer.from(data, "base64").toString();
+    if (contentType.includes("event-stream")) {
+      let out = "", at;
+      while ((at = buffer.indexOf("\n\n")) >= 0) {
+        const frame = buffer.slice(0, at);
+        buffer = buffer.slice(at + 2);
+        if (!frame.startsWith("data: {")) { out += frame + "\n\n"; continue; }
+        const event = JSON.parse(frame.slice(6)), choice = event.choices?.[0];
+        if (choice) {
+          const delta = choice.delta ??= {};
+          const text = tail + (delta.content ?? "");
+          const split = !choice.finish_reason && text.endsWith("[[private-");
+          tail = split ? "[[private-" : "";
+          if (text.includes(token)) restored = true;
+          if (text) delta.content = text.slice(0, text.length - tail.length).replaceAll(token, value);
+          if (restored && present && !structured && choice.finish_reason === "stop") delta.content = (delta.content ?? "") + notice;
+        }
+        out += "data: " + JSON.stringify(event) + "\n\n";
+      }
+      return result(out);
+    }
+    if (!finish || !buffer) return {};
+    restored = buffer.includes(token);
+    const event = JSON.parse(buffer.replaceAll(token, value));
+    if (restored && present && !structured && event.choices?.[0]?.finish_reason === "stop") event.choices[0].message.content += notice;
+    return result(JSON.stringify(event));
+  }};
 }
+
 `
 	for name, contents := range map[string]string{"package.json": manifest, "privacy.mjs": code} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(contents), 0o600); err != nil {
@@ -227,7 +250,8 @@ data: [DONE]
 }
 
 func TestPrivacyNoticeRemovedBeforeEngineSelection(t *testing.T) {
-	current := redact.FormatReplyNotice(map[string]string{"{{EMAIL_abcdefgh}}": "example"})
+	const current = "\n\n🔒 Magpie masked the following values before sending them to the model.\n\n" +
+		`- [example](#magpie-privacy-notice "{{EMAIL_abcdefgh}}")`
 	const preview = "\n\n🔒 Gray masked the following values before sending them to the model.\n\n" +
 		`- [example](#magpie-privacy-notice "{{EMAIL_abcdefgh}}")`
 	for _, engine := range []string{privacyengine.Builtin, privacyengine.Disabled} {

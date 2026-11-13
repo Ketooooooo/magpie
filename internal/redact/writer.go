@@ -17,13 +17,12 @@ import (
 // that one goes on with the same text the start moves over to it. Nothing
 // is added or dropped, so the text the agent puts together is the same.
 type Writer struct {
-	w        http.ResponseWriter
-	mode     int // 0 not yet known, 1 a stream, 2 a whole body, 3 left as it is
-	buf      bytes.Buffer
-	pending  *held
-	done     bool
-	put      map[string]int // placeholders put back, each place counted
-	messages *messageHook
+	w       http.ResponseWriter
+	mode    int // 0 not yet known, 1 a stream, 2 a whole body, 3 left as it is
+	buf     bytes.Buffer
+	pending *held
+	done    bool
+	put     map[string]int // placeholders put back, each place counted
 }
 
 const (
@@ -38,7 +37,7 @@ const (
 type held struct {
 	ctx       string
 	tails     map[string]string
-	full, cut []byte // built-in's full event, and the event without the tails
+	full, cut []byte // the event as it is, and without the tails
 }
 
 // NewWriter wraps w; Finish must be called when the handler is done.
@@ -48,12 +47,7 @@ func (rw *Writer) Header() http.Header { return rw.w.Header() }
 
 // Put is how many places of each placeholder the answer had put back,
 // so far: for the record of what masking did.
-func (rw *Writer) Put() map[string]int {
-	if rw.messages != nil {
-		return rw.messages.put
-	}
-	return rw.put
-}
+func (rw *Writer) Put() map[string]int { return rw.put }
 
 func (rw *Writer) count() map[string]int {
 	if rw.put == nil {
@@ -95,12 +89,6 @@ func binaryType(ct string) bool {
 }
 
 func (rw *Writer) WriteHeader(code int) {
-	if code >= 300 {
-		if rw.messages != nil {
-			rw.messages = nil
-			rw.mode = asIs
-		}
-	}
 	if rw.mode == unknown {
 		h := rw.w.Header()
 		if ct := h.Get("Content-Type"); ct != "" {
@@ -115,10 +103,6 @@ func (rw *Writer) WriteHeader(code int) {
 }
 
 func (rw *Writer) Write(p []byte) (int, error) {
-	if rw.messages != nil && rw.messages.failed {
-		return 0, errMessageHook
-	}
-
 	if rw.mode == unknown {
 		rw.decide(p)
 		if rw.mode != asIs {
@@ -203,25 +187,8 @@ func (rw *Writer) Finish() {
 	rw.done = true
 	switch rw.mode {
 	case whole:
-		if rw.messages != nil {
-			if out, err := rw.messages.whole(rw.buf.Bytes(), rw.Header().Get("Content-Type")); err == nil {
-				_, _ = rw.w.Write(out)
-			} else {
-				_, _ = rw.w.Write([]byte(`{"error":{"message":"The privacy engine could not restore the reply"}}`))
-			}
-			break
-		}
 		rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count()))
 	case stream:
-		if rw.messages != nil {
-			if !rw.messages.failed && rw.buf.Len() > 0 {
-				_ = rw.messageEvent(rw.buf.Bytes())
-			}
-			if !rw.messages.failed && (len(rw.messages.fields) > 0 || len(rw.messages.args) > 0) {
-				_ = rw.messageError()
-			}
-			break
-		}
 		if rw.pending != nil {
 			rw.w.Write(rw.pending.full)
 			rw.pending = nil
@@ -244,9 +211,6 @@ func (rw *Writer) Finish() {
 // first letters took the hold from the delta beside it, and the next
 // event's half of that placeholder went out as it came.
 func (rw *Writer) event(ev []byte) error {
-	if rw.messages != nil {
-		return rw.messageEvent(ev)
-	}
 	if rw.pending == nil && !holding() {
 		_, err := rw.w.Write(ev) // nothing masked to put back
 		return err

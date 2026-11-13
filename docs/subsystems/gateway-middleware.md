@@ -78,40 +78,31 @@ Gateway keys that require masking still use the built-in engine in this
 mode. Switching keeps engine configuration and masking history.
 The Magpie engine uses the existing built-in masking settings. Enabled
 installed plugins can declare an engine under `magpie.privacy` in package.json.
-A `message-v1` declaration has an engine ID, a name and a package-relative
-`entry` module. Selecting it checks the read-only `preview(fragments, context)`
+A `body-v1` declaration has an engine ID, a name and a package-relative
+`entry` module. Selecting it checks the read-only `preview(input, context)`
 export before saving the choice. The context provides the engine's local data
 directory and an abort signal.
 
-For a protected request, `begin(fragments, context)` starts a request session
-in the existing Bun plugin host. The session's `request()` returns protected
-texts in input order, diagnostic hits and whether reply restoration is needed.
-Its `reply(fields)` returns restored fields in the same order, with any mask
-and original pairs used for the local notice. The engine owns detection,
-replacement, mapping lifetime, and incomplete masks. The gateway owns
-protocol framing and only sends message fields to the engine. Each reply
-field has a stable ID and a finish flag. Embedded tool arguments are passed
-as complete JSON so an engine can restore string values while keeping the
-tool schema intact. For Responses, the gateway selects the fuller arguments
-from the deltas and the available done event, which can be the item's done
-event. It uses the same argument selection as protocol translation and the
-same event numbering as the Responses relay.
-
-The stream uses the host's existing cancellation and credit window, with
-one outstanding batch per request. Requests that need no restoration close
-the session after protection. The built-in engine uses its existing
-in-process masker and does not use a hosted stream.
-
-Masking runs at the gateway's normal request boundary for both built-in and
-installed engines. Provider middleware and model system prompts added later
+`begin(input, context)` opens one request session in the existing Bun host.
+The input has either `body` (the complete JSON body as a string) or `texts`
+(an array for routes that already have plain text). `session.request()`
+returns the protected body or texts, diagnostic hits and whether to keep
+the session for the reply. Protection happens at the same point as the
+built-in engine, so provider middleware and model system prompts added later
 are sent as configured.
 
-An engine can declare `replyNotice: true`. Magpie formats the values restored
-in visible assistant text and appends a notice at the end of a successful, single-choice
-Chat Completions reply, including a streaming reply. JSON, structured output,
-tool calls and reasoning fields do not get a notice. Each listed value links
-to the reserved `#magpie-privacy-notice` fragment and shows its mask on hover.
-Magpie removes these notices from assistant history at ingress, including
+The same session receives the client-facing reply through `session.reply`.
+Each call has `data` (base64 bytes), `contentType`, `present` for an agent
+reply, and `finish` at end of input. It returns any ready bytes as `data`
+and optional restoration counts as `put`. An engine can return no bytes
+while it holds part of a frame. Magpie passes the bytes back to the client,
+using one channel per request with the host's cancellation and credit window.
+The engine owns field selection, frame handling, tool arguments and any
+presentation. The built-in engine keeps its existing masker and writer.
+
+An engine can add a display-only footer to a visible assistant reply using
+links with the reserved `#magpie-privacy-notice` fragment. Magpie strips a
+trailing footer in that format from assistant history at ingress, including
 after an engine switch or a masking opt-out.
 
 Magpie retains its own custom rules, exceptions, category actions and

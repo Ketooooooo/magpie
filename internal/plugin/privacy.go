@@ -17,11 +17,10 @@ import (
 
 // PrivacySpec declares an engine loaded by the existing Bun plugin host.
 type PrivacySpec struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Protocol    string `json:"protocol"`
-	Entry       string `json:"entry"`
-	ReplyNotice bool   `json:"replyNotice"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	Entry    string `json:"entry"`
 }
 
 // Privacy reads a plugin's declaration without loading any of its code.
@@ -50,7 +49,7 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 	if s.Name == "" || len(s.Name) > 100 || strings.ContainsFunc(s.Name, unicode.IsControl) {
 		return nil, false
 	}
-	if s.Protocol != "message-v1" || !fs.ValidPath(s.Entry) || !filepath.IsLocal(filepath.FromSlash(s.Entry)) ||
+	if s.Protocol != "body-v1" || !fs.ValidPath(s.Entry) || !filepath.IsLocal(filepath.FromSlash(s.Entry)) ||
 		!strings.HasSuffix(s.Entry, ".mjs") {
 		return nil, false
 	}
@@ -58,15 +57,15 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 }
 
 // PreviewPrivacy asks the installed engine for a read-only preview.
-func PreviewPrivacy(ctx context.Context, target string, spec PrivacySpec, directory string, fragments, output any) error {
-	params, err := privacyParams(target, spec, directory, fragments)
+func PreviewPrivacy(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) error {
+	params, err := privacyParams(target, spec, directory, input)
 	if err != nil {
 		return err
 	}
 	return Call(ctx, "privacyPreview", params, output)
 }
 
-func privacyParams(target string, spec PrivacySpec, directory string, fragments any) (map[string]any, error) {
+func privacyParams(target string, spec PrivacySpec, directory string, input any) (map[string]any, error) {
 	root, err := os.OpenRoot(target)
 	if err != nil {
 		return nil, errors.New("The privacy plugin package is unavailable")
@@ -78,11 +77,11 @@ func privacyParams(target string, spec PrivacySpec, directory string, fragments 
 	}
 	return map[string]any{
 		"entry":     filepath.Join(target, filepath.FromSlash(spec.Entry)),
-		"directory": directory, "fragments": fragments,
+		"directory": directory, "input": input,
 	}, nil
 }
 
-// PrivacyStream carries request and reply fields through one owned host call.
+// PrivacyStream carries a request and its reply bytes through one owned host call.
 type PrivacyStream struct {
 	body    *body
 	decoder *json.Decoder
@@ -91,11 +90,11 @@ type PrivacyStream struct {
 
 const privacyWindow = 128 << 10
 
-func BeginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, directory string, fragments, output any) (*PrivacyStream, error) {
+func BeginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) (*PrivacyStream, error) {
 	if err := netproxy.Held(ctx); err != nil {
 		return nil, err
 	}
-	params, err := privacyParams(target, spec, directory, fragments)
+	params, err := privacyParams(target, spec, directory, input)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +135,7 @@ func (s *PrivacyStream) Reply(input, output any) error {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	s.body.ctx = ctx
-	if err := s.body.h.enqueueOwned(ctx, map[string]any{"method": "privacyReply", "params": map[string]any{"id": s.body.id, "fields": input}}, nil, s.body.c, callActive); err != nil {
+	if err := s.body.h.enqueueOwned(ctx, map[string]any{"method": "privacyReply", "params": map[string]any{"id": s.body.id, "chunk": input}}, nil, s.body.c, callActive); err != nil {
 		return err
 	}
 	return s.decoder.Decode(output)

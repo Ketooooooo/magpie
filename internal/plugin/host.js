@@ -144,6 +144,20 @@ function checkFetch(record) {
   record.controller.signal.throwIfAborted()
 }
 
+// Send only as much as the reader has credited, then wait before pulling more.
+async function sendChunks(id, record, bytes) {
+  for (let offset = 0; offset < bytes.length;) {
+    const n = await record.gate.take(Math.min(MAX_FRAME, bytes.length - offset))
+    checkFetch(record)
+    if (n <= 0) return
+    const data = bytes.subarray(offset, offset + n).toString("base64")
+    record.gate.spend(n + FRAME_OVERHEAD)
+    await sendForFetch(record, chunkLine(id, data))
+    checkFetch(record)
+    offset += n
+  }
+}
+
 async function sendForFetch(record, msg) {
   if (record.state === "cancelled" || record.state === "finished") return
   const ctl = record.controller
@@ -3412,7 +3426,7 @@ async function staleAccess(key, before) {
 }
 
 async function fetchAs(id, record, key, params) {
-  const { controller: ctl, gate } = record
+  const { controller: ctl } = record
   const { provider, model, npm, url, method, headers, body, session } = params
   // the sign-in as the request found it, before its loader or magpie
   // renewed it: a 401 is judged against it (staleAccess)
@@ -3490,18 +3504,7 @@ async function fetchAs(id, record, key, params) {
         checkFetch(record)
         // a chunk the stream handed over is this reader's: viewed, not copied
         const bytes = Buffer.isBuffer(chunk) ? chunk : ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength) : Buffer.from(chunk)
-        for (let off = 0; off < bytes.length; ) {
-          // one frame at a time, no more than the reader has credited: a
-          // reader that stopped leaves the upstream paused here
-          const n = await gate.take(Math.min(MAX_FRAME, bytes.length - off))
-          checkFetch(record)
-          if (n <= 0) break
-          const data = bytes.subarray(off, off + n).toString("base64")
-          gate.spend(n + FRAME_OVERHEAD)
-          await sendForFetch(record, chunkLine(id, data))
-          checkFetch(record)
-          off += n
-        }
+        await sendChunks(id, record, bytes)
       }
     }
     checkFetch(record)
@@ -3525,7 +3528,7 @@ const handlers = {
     const entry = await import(pathToFileURL(p.entry).href)
     if (typeof entry.preview !== "function") throw new Error("Privacy plugin exports no preview function")
     signal.throwIfAborted()
-    return entry.preview(p.fragments, { directory: p.directory, signal })
+    return entry.preview(p.input, { directory: p.directory, signal })
   },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {
@@ -3687,14 +3690,7 @@ const rpcInflight = new Map() // an ordinary RPC's id -> its AbortController (#4
 const privacyStreams = new Map()
 
 async function privacyOutput(id, record, value) {
-  const bytes = Buffer.from(JSON.stringify(value) + "\n")
-  for (let offset = 0; offset < bytes.length;) {
-    const n = await record.gate.take(Math.min(MAX_FRAME, bytes.length - offset))
-    checkFetch(record)
-    record.gate.spend(n + FRAME_OVERHEAD)
-    await sendForFetch(record, chunkLine(id, bytes.subarray(offset, offset + n).toString("base64")))
-    offset += n
-  }
+  await sendChunks(id, record, Buffer.from(JSON.stringify(value) + "\n"))
 }
 
 function closePrivacy(id, record) {
@@ -3729,11 +3725,11 @@ rl.on("line", (line) => {
     return
   }
   if (msg.method === "privacyReply") {
-    const { id, fields } = msg.params
+    const { id, chunk } = msg.params
     const record = privacyStreams.get(id)
     if (record?.session) {
       // The reader sends another batch only after consuming this result.
-      Promise.resolve().then(() => privacyOutput(id, record, record.session.reply(fields)))
+      Promise.resolve().then(() => privacyOutput(id, record, record.session.reply(chunk)))
         .catch(async () => {
           if (!privacyStreams.has(id)) return
           await sendForFetch(record, { id, error: { message: "The privacy engine could not restore the reply" } })
@@ -3752,7 +3748,7 @@ rl.on("line", (line) => {
     waitForReady(record).then(async () => {
       const entry = await import(pathToFileURL(p.entry).href)
       checkFetch(record)
-      record.session = await entry.begin(p.fragments, { directory: p.directory, signal: record.controller.signal })
+      record.session = await entry.begin(p.input, { directory: p.directory, signal: record.controller.signal })
       checkFetch(record)
       transitionFetch(record, "streaming")
       await privacyOutput(id, record, record.session.request())

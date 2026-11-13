@@ -6,8 +6,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-
-	"github.com/tidwall/gjson"
 )
 
 // kept are the keys whose strings are left alone: ids, names and kinds the
@@ -583,23 +581,6 @@ func restoreJSON(body []byte, put map[string]int) []byte {
 		return []byte(restore(string(body), false, put))
 	}
 	return out
-}
-
-func replyEnvelope(body []byte, typ string) bool {
-	switch {
-	case strings.HasPrefix(typ, "response."), strings.HasPrefix(typ, "message_"), strings.HasPrefix(typ, "content_block_"):
-		return true
-	case typ == "message":
-		return gjson.GetBytes(body, "content").IsArray()
-	}
-	obj := gjson.GetBytes(body, "object").String()
-	return strings.HasPrefix(obj, "chat.completion") || obj == "response" ||
-		gjson.GetBytes(body, "choices").IsArray() || gjson.GetBytes(body, "candidates").IsArray()
-}
-
-func privateReplyField(path, key, typ string, protocol bool, signed, args []string) bool {
-	return under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning") ||
-		protocol && !under(path, args) && (kept[key] || isID(key) || key == "obfuscation")
 }
 
 // heldIn says b may have a placeholder of a value held, in any of the
