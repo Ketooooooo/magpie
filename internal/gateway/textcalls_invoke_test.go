@@ -593,7 +593,7 @@ func TestResponsesTextCallsNumberOn(t *testing.T) {
 		lines = append(lines, "event: "+e["type"].(string)+"\ndata: "+string(b))
 	}
 	stream := sse(lines...)
-	tc := &responsesTextCalls{names: map[string]bool{"ToolSearch": true}, sse: true, seq: -1}
+	tc := &responsesTextCalls{names: map[string]bool{"ToolSearch": true}, sse: true}
 	var out []byte
 	for _, p := range cutInto(stream, 37) {
 		out = append(out, tc.write([]byte(p))...)

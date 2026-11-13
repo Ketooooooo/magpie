@@ -78,29 +78,29 @@ Gateway keys that require masking still use the built-in engine in this
 mode. Switching keeps engine configuration and masking history.
 The Magpie engine uses the existing built-in masking settings. Enabled
 installed plugins can declare an engine under `magpie.privacy` in package.json.
-A `plugin-scan-v1` declaration has an engine ID, a name and a package-relative
-`entry` module. Selecting it loads that module in the existing Bun plugin host
-and checks it before changing the setting. The user can install and select the
-package without a service address or token.
+A `message-v1` declaration has an engine ID, a name and a package-relative
+`entry` module. Selecting it checks the read-only `preview(fragments, context)`
+export before saving the choice. The context provides the engine's local data
+directory and an abort signal.
 
-The module exports `protect(fragments, context)`. It gets a batch of
-`{text, scope}` fragments and the package's private data directory, an abort
-signal and whether this is a preview. A preview does not persist discoveries.
-It returns `{reports}`, with a complete report per fragment, in
-order. Reports describe the
-protected text and replacements, using UTF-8 byte ranges. Each replacement
-can report its source as `by` (`rule`, `model` or `known`); if omitted, the
-source is unknown. Reversible masks are non-empty UTF-8 strings. The engine
-chooses distinct placeholders that can be distinguished from ordinary reply
-text. Magpie restores exact matches from the request's map, preferring the
-longest when multiple masks match at the same position. The gateway validates
-the reports and owns protocol rewrites and restoration. Engine errors stop
-the request.
+For a protected request, `begin(fragments, context)` starts a request session
+in the existing Bun plugin host. The session's `request()` returns protected
+texts in input order, diagnostic hits and whether reply restoration is needed.
+Its `reply(fields)` returns restored fields in the same order, with any mask
+and original pairs used for the local notice. The engine owns detection,
+replacement, mapping lifetime, and incomplete masks. The gateway owns
+protocol framing and only sends message fields to the engine. Each reply
+field has a stable ID and a finish flag. Embedded tool arguments are passed
+as complete JSON so an engine can restore string values while keeping the
+tool schema intact. For Responses, the gateway selects the fuller arguments
+from the deltas and the available done event, which can be the item's done
+event. It uses the same argument selection as protocol translation and the
+same event numbering as the Responses relay.
 
-Inside serialized tool arguments, matching uses the mask's JSON string
-spelling and leaves JSON syntax intact. Streaming can join adjacent
-fragments of the same argument. Choose placeholders that cannot occur
-as ordinary text or object keys in a reply.
+The stream uses the host's existing cancellation and credit window, with
+one outstanding batch per request. Requests that need no restoration close
+the session after protection. The built-in engine uses its existing
+in-process masker and does not use a hosted stream.
 
 Masking runs at the gateway's normal request boundary for both built-in and
 installed engines. Provider middleware and model system prompts added later

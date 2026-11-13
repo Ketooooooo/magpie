@@ -23,25 +23,21 @@ func pluginDataPath(identity, id string) string {
 
 func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 	target, directory := plugin.Target(entry.Spec), pluginDataPath(plugin.Name(entry.Spec), spec.ID)
-	scan := func(ctx context.Context, fragments []redact.Fragment, preview bool) ([]scanReport, error) {
+	begin := func(ctx context.Context, fragments []redact.Fragment, out any) (*plugin.PrivacyStream, error) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
-			return nil, pluginUnavailable
+			return nil, err
 		}
-		var reply struct {
-			Reports []scanReport `json:"reports"`
-		}
-		if err := plugin.ProtectWithPlugin(ctx, target, spec, directory, fragments, preview, &reply); err != nil {
-			return nil, pluginUnavailable
-		}
-		return reply.Reports, nil
-	}
-	run := func(ctx context.Context, fragments []redact.Fragment) ([]scanReport, error) {
-		return scan(ctx, fragments, false)
+		return plugin.BeginPrivacyStream(ctx, target, spec, directory, fragments, out)
 	}
 	preview := func(ctx context.Context, text string) (string, []gwmw.Hit, bool, error) {
-		return pluginPreview(ctx, text, spec.Name, func(ctx context.Context, fragments []redact.Fragment) ([]scanReport, error) {
-			return scan(ctx, fragments, true)
-		})
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return "", nil, false, pluginUnavailable
+		}
+		var out protectedFields
+		if err := plugin.PreviewPrivacy(ctx, target, spec, directory, []redact.Fragment{{Text: text, Scope: "user"}}, &out); err != nil || len(out.Texts) != 1 {
+			return "", nil, false, pluginUnavailable
+		}
+		return out.Texts[0], out.Hits, false, nil
 	}
 	return engine{
 		info: Info{ID: spec.ID, Name: spec.Name, Off: entry.Off},
@@ -50,9 +46,7 @@ func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 			return err
 		},
 		begin: func(ctx context.Context, _ settings.Settings, _ bool) (context.Context, gwmw.Masker, error) {
-			masker := newPluginMasker(ctx, spec.Name, run)
-			masker.replyNotice = spec.ReplyNotice
-			return ctx, masker, nil
+			return ctx, &pluginMasker{ctx: ctx, name: spec.Name, begin: begin, replyNotice: spec.ReplyNotice}, nil
 		},
 		preview: preview,
 	}

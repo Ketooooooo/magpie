@@ -38,18 +38,32 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatalf("before installation, only Magpie should be listed: %+v", got)
 	}
 	dir := t.TempDir()
-	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"plugin-scan-v1","entry":"privacy.mjs","replyNotice":true}}}`
+	manifest := `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"message-v1","entry":"privacy.mjs","replyNotice":true}}}`
 	code := `
 import { existsSync } from "node:fs";
-export function protect(fragments) {
+const value = "` + value + `", token = "` + token + `";
+export function preview(fragments) {
   if (existsSync(new URL("./offline", import.meta.url))) throw new Error("detector unavailable");
-  return { reports: fragments.map(({text}) => {
-    const value = "` + value + `", token = "` + token + `";
-    const index = text.indexOf(value);
-    const start = Buffer.byteLength(text.slice(0, index));
-    const changes = index >= 0 ? [{start, end: start + value.length, value, placeholder: token, category: "EMAIL", reversible: true}] : [];
-    return {complete: true, protected_text: text.replace(value, token), changes};
-  }) };
+  const hits = [];
+  const texts = fragments.map(({text}) => {
+    if (text.includes(value)) hits.push({kind: "EMAIL", placeholder: token});
+    return text.replaceAll(value, token);
+  });
+  return {texts, hits, restore: hits.length > 0};
+}
+export function begin(fragments) {
+  const request = preview(fragments);
+  const pending = new Map();
+  return {request: () => request, reply: (fields) => fields.map(({id,text,finish}) => {
+    const full = (pending.get(id) || "") + text;
+    const start = full.lastIndexOf("[");
+    const maybe = full.lastIndexOf("[[");
+    const at = maybe >= 0 && token.startsWith(full.slice(maybe)) ? maybe : start;
+    const tail = !finish && at >= 0 && full.slice(at) !== token && token.startsWith(full.slice(at)) ? full.slice(at) : "";
+    if (tail) pending.set(id, tail); else pending.delete(id);
+    const ready = full.slice(0, full.length - tail.length);
+    return {text:ready.replaceAll(token,value), restorations:ready.includes(token) ? {[token]:value} : {}};
+  })};
 }
 `
 	for name, contents := range map[string]string{"package.json": manifest, "privacy.mjs": code} {

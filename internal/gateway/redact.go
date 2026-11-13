@@ -126,10 +126,12 @@ func redactedReply(ctx context.Context, w http.ResponseWriter, body []byte, noti
 		return out{b, maskHits{n: n}}
 	})
 	if err != nil {
+		closeMasker(m)
 		return w, body, func() {}, maskHits{}, err
 	}
 	labelMaskHits(ctx, m, began, &o.h)
 	if err := blocked(o.h); err != nil {
+		closeMasker(m)
 		return w, body, func() {}, maskHits{}, err
 	}
 	if o.h.n == 0 && o.h.engine == privacyengine.Builtin { // built-in allow-only hits don't rewrite the request
@@ -196,7 +198,8 @@ func redactedPromptHits(ctx context.Context, w http.ResponseWriter, prompt strin
 // maskedText is s masked as the settings say, and how many values it
 // swapped; an error when it can't be (fail closed).
 func maskedText(ctx context.Context, s string) (string, int, error) {
-	_, masked, h, err := maskTextHits(ctx, s)
+	m, masked, h, err := maskTextHits(ctx, s)
+	closeMasker(m)
 	return masked, h.n, err
 }
 
@@ -209,8 +212,14 @@ func maskTextHits(ctx context.Context, s string) (gwmw.Masker, string, maskHits,
 	return m, texts[0], h, err
 }
 
-// maskTexts protects strings from one request and keeps their common
-// restoration map. A hosted engine can scan all fields in one call.
+func closeMasker(m gwmw.Masker) {
+	if closer, ok := m.(interface{ Close() }); ok {
+		closer.Close()
+	}
+}
+
+// maskTexts protects strings from one request and retains the reply session.
+// Callers that only use the protected input close the session immediately.
 func maskTexts(ctx context.Context, texts []string) (gwmw.Masker, maskHits, error) {
 	ctx, m, err := maskingFor(ctx)
 	if m == nil || len(texts) == 0 {
@@ -256,9 +265,11 @@ func maskTexts(ctx context.Context, texts []string) (gwmw.Masker, maskHits, erro
 		return nil
 	})
 	if err != nil {
+		closeMasker(m)
 		return nil, maskHits{}, err
 	}
 	if block != nil {
+		closeMasker(m)
 		return nil, maskHits{}, block
 	}
 	return m, h, nil
@@ -507,7 +518,8 @@ func maskedQuery(ctx context.Context, query string, p *provider.Provider) (strin
 	if p != nil && p.SkipsRedaction() {
 		return query, nil
 	}
-	_, masked, h, err := maskTextHits(ctx, query)
+	m, masked, h, err := maskTextHits(ctx, query)
+	closeMasker(m)
 	if err == nil {
 		id := ""
 		if p != nil {

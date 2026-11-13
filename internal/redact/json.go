@@ -568,53 +568,21 @@ func typeOf(data []byte) string {
 }
 
 // RestoreJSON puts the values back in a response body.
-func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil, nil, nil) }
+func RestoreJSON(body []byte) []byte { return restoreJSON(body, nil) }
 
-type restoreText func(string, bool, map[string]int) string
-
-// restoreJSON walks and escapes the reply the same way for both maskers.
-// A request-local masker leaves sealed and reasoning fields as received.
-func restoreJSON(body []byte, put map[string]int, replace restoreText, notice *chatNotice) []byte {
-	local := replace != nil
-	if !local {
-		if !heldIn(body) && !hasShapes(body) {
-			return body
-		}
-		replace = restore
+// restoreJSON is RestoreJSON, counting in put as restore does.
+func restoreJSON(body []byte, put map[string]int) []byte {
+	if !heldIn(body) && !hasShapes(body) {
+		return body
 	}
 	typ := typeOf(body)
-	var signed, args []string
-	protocol := false
-	if local {
-		signed, args, _ = scan(body)
-		protocol = replyEnvelope(body, typ)
-	}
-	choice := notice.choice(body, "message")
 	out, ok := walk(body, func(path, key, s string) string {
-		if local && (sealedText(key, s) || privateReplyField(path, key, typ, protocol, signed, args)) {
-			return s
-		}
-		if path == chatMessageText && choice.Exists() {
-			count := make(map[string]int)
-			text := replace(s, false, count)
-			notice.record(s, text, count, put)
-			return text
-		}
-		escaped := asJSON(key, typ)
-		if local && escaped {
-			return editArgument(s, argumentQuote{}, func(text string, _ bool) string {
-				return replace(text, true, put)
-			})
-		}
-		return replace(s, escaped, put)
+		return restore(s, asJSON(key, typ), put)
 	})
 	if !ok {
-		if local {
-			return body
-		}
-		return []byte(replace(string(body), false, put))
+		return []byte(restore(string(body), false, put))
 	}
-	return notice.append(out, choice, "message")
+	return out
 }
 
 func replyEnvelope(body []byte, typ string) bool {
@@ -632,70 +600,6 @@ func replyEnvelope(body []byte, typ string) bool {
 func privateReplyField(path, key, typ string, protocol bool, signed, args []string) bool {
 	return under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning") ||
 		protocol && !under(path, args) && (kept[key] || isID(key) || key == "obfuscation")
-}
-
-type argumentQuote struct {
-	inString bool
-	escape   int // -1 after a backslash, positive for remaining Unicode escape digits
-}
-
-// argumentStrings visits the literal contents of JSON strings, excluding their
-// quotes and any numbers, booleans or punctuation between strings.
-func argumentStrings(s string, state argumentQuote, visit func(start, end int, open bool)) argumentQuote {
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if state.escape != 0 {
-			if state.escape == -1 {
-				state.escape = 0
-				if s[i] == 'u' {
-					state.escape = 4
-				}
-			} else {
-				state.escape--
-			}
-			if start == i {
-				start = i + 1 // the beginning of this escape went in an earlier event
-			}
-			continue
-		}
-		switch s[i] {
-		case '\\':
-			if state.inString {
-				state.escape = -1
-			}
-		case '"':
-			if state.inString {
-				if visit != nil {
-					visit(start, i, false)
-				}
-			} else {
-				start = i + 1
-			}
-			state.inString = !state.inString
-		}
-	}
-	if state.inString && visit != nil {
-		visit(start, len(s), true)
-	}
-	return state
-}
-
-func editArgument(s string, state argumentQuote, edit func(string, bool) string) string {
-	var out strings.Builder
-	last := 0
-	argumentStrings(s, state, func(start, end int, open bool) {
-		text := edit(s[start:end], open)
-		if text != s[start:end] {
-			out.WriteString(s[last:start])
-			out.WriteString(text)
-			last = end
-		}
-	})
-	if last == 0 {
-		return s
-	}
-	out.WriteString(s[last:])
-	return out.String()
 }
 
 // heldIn says b may have a placeholder of a value held, in any of the

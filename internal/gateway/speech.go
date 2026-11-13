@@ -66,7 +66,8 @@ func (sp *speechRequest) mask(ctx context.Context, w http.ResponseWriter) (http.
 	if len(texts) == 0 {
 		return w, func() {}, maskHits{}, "", nil
 	}
-	_, hits, err := maskTexts(ctx, texts)
+	m, hits, err := maskTexts(ctx, texts)
+	closeMasker(m)
 	if err != nil {
 		return w, func() {}, maskHits{}, "", err
 	}

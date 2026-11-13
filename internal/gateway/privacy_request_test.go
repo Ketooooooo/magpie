@@ -31,17 +31,27 @@ func TestHostedPrivacyRequestBatchAndCapture(t *testing.T) {
 	t.Cleanup(plugin.Settle)
 	t.Cleanup(archivePending.Wait)
 	files := map[string]string{
-		"package.json": `{"name":"batch-privacy","magpie":{"privacy":{"id":"batch-privacy","name":"Batch privacy","protocol":"plugin-scan-v1","entry":"privacy.mjs"}}}`,
+		"package.json": `{"name":"batch-privacy","magpie":{"privacy":{"id":"batch-privacy","name":"Batch privacy","protocol":"message-v1","entry":"privacy.mjs"}}}`,
 		"privacy.mjs": `
 import { appendFileSync } from "node:fs";
 const values = new Map([["` + first + `","` + firstMask + `"], ["` + second + `","` + secondMask + `"]]);
-export function protect(fragments, {preview}) {
-  if (!preview) appendFileSync(new URL("./batches", import.meta.url), fragments.length + "\n");
-  return {reports: fragments.map(({text}) => {
+export function preview(fragments) {
+  const hits = [];
+  const texts = fragments.map(({text}) => {
     const mask = values.get(text);
-    const changes = mask ? [{start: 0, end: text.length, value: text, placeholder: mask, category: "FIELD", reversible: true}] : [];
-    return {complete: true, protected_text: mask ?? text, changes};
-  })};
+    if (mask) hits.push({kind: "FIELD", placeholder: mask});
+    return mask ?? text;
+  });
+  return {texts, hits, restore: hits.length > 0};
+}
+export function begin(fragments) {
+  appendFileSync(new URL("./batches", import.meta.url), fragments.length + "\n");
+  const request = preview(fragments);
+  const originals = new Map([...values].map(([value, mask]) => [mask, value]));
+  return {request: () => request, reply: fields => fields.map(({text}) => ({
+    text: originals.get(text) ?? text,
+    restorations: originals.has(text) ? {[text]:originals.get(text)} : {},
+  }))};
 }
 `,
 	}

@@ -3521,11 +3521,11 @@ async function fetchAs(id, record, key, params) {
 // ---- the loop ----------------------------------------------------------------
 
 const handlers = {
-  async privacyProtect(p, signal) {
+  async privacyPreview(p, signal) {
     const entry = await import(pathToFileURL(p.entry).href)
-    if (typeof entry.protect !== "function") throw new Error("Privacy plugin exports no protect function")
+    if (typeof entry.preview !== "function") throw new Error("Privacy plugin exports no preview function")
     signal.throwIfAborted()
-    return entry.protect(p.fragments, { directory: p.directory, preview: p.preview, signal })
+    return entry.preview(p.fragments, { directory: p.directory, signal })
   },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {
@@ -3684,6 +3684,26 @@ const gatewayInflight = new Map() // RPC id -> AbortController
 const signInSteps = new Set(["authorize", "callback", "apiKey"])
 const signInInflight = new Map() // RPC id -> AbortController
 const rpcInflight = new Map() // an ordinary RPC's id -> its AbortController (#4678)
+const privacyStreams = new Map()
+
+async function privacyOutput(id, record, value) {
+  const bytes = Buffer.from(JSON.stringify(value) + "\n")
+  for (let offset = 0; offset < bytes.length;) {
+    const n = await record.gate.take(Math.min(MAX_FRAME, bytes.length - offset))
+    checkFetch(record)
+    record.gate.spend(n + FRAME_OVERHEAD)
+    await sendForFetch(record, chunkLine(id, bytes.subarray(offset, offset + n).toString("base64")))
+    offset += n
+  }
+}
+
+function closePrivacy(id, record) {
+  privacyStreams.delete(id)
+  inflight.delete(id)
+  transitionFetch(record, "cancelled")
+  done()
+}
+
 const rl = readline.createInterface({ input: process.stdin, terminal: false })
 rl.on("line", (line) => {
   if (!line.trim()) return
@@ -3696,7 +3716,8 @@ rl.on("line", (line) => {
   if (msg.method === "abort") {
     const id = msg.params?.id
     const record = inflight.get(id)
-    if (record) transitionFetch(record, "cancelled")
+    if (privacyStreams.has(id)) closePrivacy(id, record)
+    else if (record) transitionFetch(record, "cancelled")
     gatewayInflight.get(id)?.abort()
     signInInflight.get(id)?.abort()
     rpcInflight.get(id)?.abort()
@@ -3707,7 +3728,41 @@ rl.on("line", (line) => {
     if (record?.state === "streaming") record.gate.add(msg.params?.n ?? 0)
     return
   }
+  if (msg.method === "privacyReply") {
+    const { id, fields } = msg.params
+    const record = privacyStreams.get(id)
+    if (record?.session) {
+      // The reader sends another batch only after consuming this result.
+      Promise.resolve().then(() => privacyOutput(id, record, record.session.reply(fields)))
+        .catch(async () => {
+          if (!privacyStreams.has(id)) return
+          await sendForFetch(record, { id, error: { message: "The privacy engine could not restore the reply" } })
+          if (privacyStreams.has(id)) closePrivacy(id, record)
+        })
+    }
+    return
+  }
   pending++
+  if (msg.method === "privacyBegin") {
+    const id = msg.id
+    const p = msg.params
+    const record = { state: "setup", controller: new AbortController(), gate: makeGate(p.window) }
+    inflight.set(id, record)
+    privacyStreams.set(id, record)
+    waitForReady(record).then(async () => {
+      const entry = await import(pathToFileURL(p.entry).href)
+      checkFetch(record)
+      record.session = await entry.begin(p.fragments, { directory: p.directory, signal: record.controller.signal })
+      checkFetch(record)
+      transitionFetch(record, "streaming")
+      await privacyOutput(id, record, record.session.request())
+    }).catch(async () => {
+      if (!privacyStreams.has(id)) return
+      await sendForFetch(record, { id, error: { message: "The privacy engine could not protect the request" } })
+      if (privacyStreams.has(id)) closePrivacy(id, record)
+    })
+    return
+  }
   if (msg.method === "init") {
     setReady(handlers.init(msg.params ?? {}))
     ready.then(
@@ -3811,5 +3866,6 @@ rl.on("line", (line) => {
 })
 rl.on("close", () => {
   closed = true
+  for (const [id, record] of privacyStreams) closePrivacy(id, record)
   if (pending === 0) process.exit(0)
 })

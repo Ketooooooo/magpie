@@ -7304,7 +7304,7 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 		written = &anthropicTextCalls{names: names, sse: sse}
 	} else if proto == provider.Responses && names != nil {
 		// a Responses reply, streamed or whole (textcalls_relay.go)
-		written = &responsesTextCalls{names: names, sse: sse, seq: -1}
+		written = &responsesTextCalls{names: names, sse: sse}
 	} else if names := geminiToolNames(body); proto == provider.Gemini && names != nil {
 		// a Gemini reply, streamed or whole (textcalls_relay.go)
 		written = &geminiTextCalls{names: names, sse: sse}
@@ -7736,10 +7736,10 @@ func (s *Server) passthrough(w http.ResponseWriter, r *http.Request, p provider.
 			// reading it dies on its JSON before the error is reached
 			dropHalf()
 			tail := sniff.resp
-			if rc, ok := written.(*responsesTextCalls); ok && int64(rc.seq) >= tail.next {
+			if rc, ok := written.(*responsesTextCalls); ok && rc.seq.Next() > tail.next {
 				// the stream's events were numbered again on their way
 				// out: the failure follows the last the client got
-				tail.next = int64(rc.seq) + 1
+				tail.next = rc.seq.Next()
 			}
 			tail.model = cmp.Or(sniff.served, model)
 			w.Write(append(apart(), streamFailureAt(proto, failed, tail)...))

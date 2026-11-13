@@ -10,11 +10,16 @@ import (
 func TestChatNoticeSkipsNonTextOutput(t *testing.T) {
 	const mask = "{{EMAIL_abcdefgh}}"
 	const value = "case@example.org"
-	restore := func(s string, _ bool, counts map[string]int) string {
-		if count := strings.Count(s, mask); counts != nil && count > 0 {
-			counts[mask] += count
+	restore := func(input, output any) error {
+		for _, field := range input.([]messageField) {
+			result := messageResult{Text: strings.ReplaceAll(field.Text, mask, value)}
+			if result.Text != field.Text {
+				result.Restorations = map[string]string{mask: value}
+			}
+			out := output.(*[]messageResult)
+			*out = append(*out, result)
 		}
-		return strings.ReplaceAll(s, mask, value)
+		return nil
 	}
 	for _, test := range []struct{ name, message, finish string }{
 		{"JSON", `{"content":"{\"contact\":\"` + mask + `\"}"}`, "stop"},
@@ -23,14 +28,11 @@ func TestChatNoticeSkipsNonTextOutput(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			reply := httptest.NewRecorder()
-			writer := NewRestoringWriter(reply, restore, nil, func(map[string]int) string {
-				t.Error("non-chat content must not render a notice")
-				return ""
-			})
+			writer := NewMessageWriter(reply, restore, true)
 			body := `{"choices":[{"index":0,"message":` + test.message + `,"finish_reason":"` + test.finish + `"}]}`
 			writer.Write([]byte(body))
 			writer.Finish()
-			if got := reply.Body.Bytes(); !json.Valid(got) || !strings.Contains(string(got), value) || strings.Contains(string(got), mask) {
+			if got := reply.Body.Bytes(); !json.Valid(got) || !strings.Contains(string(got), value) || strings.Contains(string(got), mask) || strings.Contains(string(got), replyNoticeTarget) {
 				t.Fatalf("expected valid restored output, got %s", got)
 			}
 		})

@@ -3,10 +3,10 @@ package gateway
 import (
 	"bytes"
 	"encoding/json"
-	"strconv"
 	"strings"
 
 	"github.com/tidwall/gjson"
+	"github.com/yetone/magpie/internal/responsesstream"
 )
 
 // responsesTextCalls does what textCallTidy does in a Responses reply
@@ -51,7 +51,7 @@ type responsesTextCalls struct {
 	names map[string]bool
 	sse   bool
 	buf   []byte
-	seq   int // the last sequence_number sent on, -1 before the first
+	seq   responsesstream.Numbering
 	// numbers: the stream numbers its events, so the reply's own are too
 	numbers bool
 
@@ -110,23 +110,10 @@ func (t *responsesTextCalls) numbered(out []byte) []byte {
 		}
 		ev := rest[:n]
 		rest = rest[n:]
-		data := eventData(ev)
-		sq := gjson.GetBytes(data, "sequence_number")
-		if sq.Type != gjson.Number || sq.Index <= 0 {
-			res = append(res, ev...)
-			continue
+		if data := t.seq.Number(eventData(ev)); data != nil {
+			ev = withData(ev, data)
 		}
-		want := int(sq.Int())
-		if t.seq >= 0 && want <= t.seq {
-			want = t.seq + 1
-		}
-		t.seq = want
-		if int(sq.Int()) == want {
-			res = append(res, ev...)
-			continue
-		}
-		nd := append(append(append([]byte(nil), data[:sq.Index]...), strconv.Itoa(want)...), data[sq.Index+len(sq.Raw):]...)
-		res = append(res, withData(ev, nd)...)
+		res = append(res, ev...)
 	}
 	return res
 }
@@ -145,7 +132,7 @@ func reData(ev []byte, v any) []byte {
 // sent (numbered) when the stream numbers its events.
 func (t *responsesTextCalls) send(typ string, fields map[string]any) []byte {
 	if t.numbers {
-		fields["sequence_number"] = t.seq + 1
+		fields["sequence_number"] = t.seq.Next()
 	}
 	fields["type"] = typ
 	b, err := marshalPlain(fields)
