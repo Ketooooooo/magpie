@@ -18,7 +18,6 @@ type PrivacySpec struct {
 	Name        string `json:"name"`
 	Protocol    string `json:"protocol"`
 	Entry       string `json:"entry"`
-	MemoryMiB   int    `json:"memoryMiB"`
 	ReplyNotice bool   `json:"replyNotice"`
 }
 
@@ -49,7 +48,7 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 		return nil, false
 	}
 	if s.Protocol != "plugin-scan-v1" || !fs.ValidPath(s.Entry) || !filepath.IsLocal(filepath.FromSlash(s.Entry)) ||
-		!strings.HasSuffix(s.Entry, ".mjs") || s.MemoryMiB < 0 || s.MemoryMiB > 2048 {
+		!strings.HasSuffix(s.Entry, ".mjs") {
 		return nil, false
 	}
 	return s, pkg.Main == "" && len(pkg.Exports) == 0
@@ -58,20 +57,6 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 // ProtectWithPlugin calls the package in the existing Bun host. The entry is
 // resolved inside the installed package before any unmasked text is passed.
 func ProtectWithPlugin(ctx context.Context, target string, spec PrivacySpec, directory string, fragments any, preview bool, output any) error {
-	return callPrivacy(ctx, target, spec, "privacyProtect", map[string]any{
-		"directory": directory, "fragments": fragments,
-		"memoryMiB": spec.MemoryMiB, "preview": preview,
-	}, output)
-}
-
-// PrivacyNotice renders the plugin's optional notice for restored reply text.
-func PrivacyNotice(ctx context.Context, target string, spec PrivacySpec, values map[string]string, linkTarget string) (string, error) {
-	var notice string
-	err := callPrivacy(ctx, target, spec, "privacyNotice", map[string]any{"values": values, "linkTarget": linkTarget}, &notice)
-	return notice, err
-}
-
-func callPrivacy(ctx context.Context, target string, spec PrivacySpec, method string, params map[string]any, output any) error {
 	root, err := os.OpenRoot(target)
 	if err != nil {
 		return errors.New("The privacy plugin package is unavailable")
@@ -81,6 +66,9 @@ func callPrivacy(ctx context.Context, target string, spec PrivacySpec, method st
 	if err != nil || !file.Mode().IsRegular() {
 		return errors.New("The privacy plugin entry is unavailable")
 	}
-	params["entry"] = filepath.Join(target, filepath.FromSlash(spec.Entry))
-	return Call(ctx, method, params, output)
+	return Call(ctx, "privacyProtect", map[string]any{
+		"entry":     filepath.Join(target, filepath.FromSlash(spec.Entry)),
+		"directory": directory, "fragments": fragments,
+		"preview": preview,
+	}, output)
 }

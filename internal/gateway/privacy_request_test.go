@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -77,8 +78,8 @@ export function protect(fragments, {preview}) {
 		t.Fatalf("native should scan both strings once and a rejected request should not scan: status %d, batches %q, %v", unknown, batches, err)
 	}
 
-	f.reply = `{"choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
-	check := func(id string, status int, record bool) {
+	f.reply = `{"choices":[{"index":0,"message":{"role":"assistant","content":"` + secondMask + `"},"finish_reason":"stop"}]}`
+	check := func(id string, status int, unmasked bool) {
 		t.Helper()
 		o := &fakeObserver{watch: true, bodies: usage.WholeBodies}
 		defer usage.Observe(o)()
@@ -90,14 +91,33 @@ export function protect(fragments, {preview}) {
 		s.Handler().ServeHTTP(w, r)
 		call := s.Recent()[0]
 		transcript, err := sessions.GatewayTranscript(usage.AgentOf("claude-cli/2.1.0"), id)
-		if w.Code != status || err != nil || (w.Header().Get(ArchiveHeader) != "") != record ||
-			(call.RequestBody != "") != record || (transcript.Captured == 1) != record {
+		if w.Code != status || err != nil || w.Header().Get(ArchiveHeader) == "" ||
+			call.RequestBody == "" || (transcript.Captured == 1) != unmasked {
 			t.Fatalf("capture must follow the actual route: status=%d recent=%t archive=%t sessions=%d error=%v",
 				w.Code, call.RequestBody != "", w.Header().Get(ArchiveHeader) != "", transcript.Captured, err)
 		}
+		if !unmasked && (strings.Contains(call.RequestBody, second) ||
+			!strings.Contains(call.RequestBody, secondMask) || call.ResponseBody != "") {
+			t.Fatal("Recent Calls should keep only the protected request")
+		}
+		if !unmasked {
+			archivePending.Wait()
+			path := filepath.Join(settings.Dir(), "request-archive", filepath.FromSlash(call.Archive)+".json")
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var archived Archived
+			if err := json.Unmarshal(data, &archived); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(archived.Request.Body, second) || !strings.Contains(archived.Request.Body, secondMask) || archived.Response.Body != "" {
+				t.Fatal("archive should keep only the protected request")
+			}
+		}
 		o.mu.Lock()
 		defer o.mu.Unlock()
-		if len(o.attempts) != 1 || (o.attempts[0].BodyOut != "") != record {
+		if len(o.attempts) != 1 || (o.attempts[0].BodyOut != "") != unmasked {
 			t.Fatalf("observer did not follow the same capture decision: %+v", o.attempts)
 		}
 	}

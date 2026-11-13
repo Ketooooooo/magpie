@@ -51,15 +51,7 @@ func hostedEngine(entry plugin.Entry, spec plugin.PrivacySpec) engine {
 		},
 		begin: func(ctx context.Context, _ settings.Settings, _ bool) (context.Context, gwmw.Masker, error) {
 			masker := newPluginMasker(ctx, spec.Name, run)
-			if spec.ReplyNotice {
-				masker.notice = func(ctx context.Context, values map[string]string) string {
-					notice, err := plugin.PrivacyNotice(ctx, target, spec, values, redact.ReplyNoticeTarget)
-					if err != nil {
-						return ""
-					}
-					return notice
-				}
-			}
+			masker.replyNotice = spec.ReplyNotice
 			return ctx, masker, nil
 		},
 		preview: preview,

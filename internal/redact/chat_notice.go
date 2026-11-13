@@ -77,7 +77,7 @@ func (n *chatNotice) append(data []byte, choice gjson.Result, field string) []by
 		return data
 	}
 	notice := n.render(n.values)
-	if notice == "" || stripReplyNotice(notice) != "" {
+	if notice == "" {
 		return data
 	}
 	part := gjson.GetBytes(data, "choices.0."+field)

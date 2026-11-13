@@ -2767,7 +2767,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		call.maskIn = &laterMasked{ctx: context.WithoutCancel(r.Context()), plain: body}
 	}
 	maskDone = true
-	logBody(body)
+	if capture.omitBody && !sentWhole && maskedHits.engine != "" {
+		// The engine already protected this body. Keep it without opening
+		// any reply or retry capture, which can contain restored values.
+		call.RequestBody, call.RequestTruncated = captureRequestBody(redact.ScrubJSON(body))
+		call.wire = archiving(r, capture, start, body)
+	} else {
+		logBody(body)
+	}
 	// a routing group held to some accounts holds the request to them
 	// from here on, as a gateway key's accounts do
 	if isGroup {
@@ -5589,7 +5596,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			rec.DownBytes, rec.ImageFilesSaved, rec.ImageFiles = up.downOf(), up.saved, up.images
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
-		withBodies(&rec, &call)
+		if !capture.omitBody {
+			withBodies(&rec, &call)
+		}
 		appendUsage(r, rec)
 		if call.Status < 400 {
 			// what its model searched with its provider's own tool

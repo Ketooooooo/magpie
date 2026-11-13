@@ -88,26 +88,31 @@ The module exports `protect(fragments, context)`. It gets a batch of
 signal and whether this is a preview. A preview does not persist discoveries.
 It returns `{reports}`, with a complete report per fragment, in
 order. Reports describe the
-protected text and replacements, using UTF-8 byte ranges. Reversible masks
-must use the gateway's `{{KIND_token}}` format. The gateway validates the
-reports, performs protocol-aware rewrites and owns the request's restoration
-map. Engine errors stop the request. A native plugin that keeps a model
-resident can declare up to 2048 `memoryMiB` for the Bun host's RSS watchdog.
+protected text and replacements, using UTF-8 byte ranges. Each replacement
+can report its source as `by` (`rule`, `model` or `known`); if omitted, the
+source is unknown. Reversible masks are non-empty UTF-8 strings. The engine
+chooses distinct placeholders that can be distinguished from ordinary reply
+text. Magpie restores exact matches from the request's map, preferring the
+longest when multiple masks match at the same position. The gateway validates
+the reports and owns protocol rewrites and restoration. Engine errors stop
+the request.
+
+Inside serialized tool arguments, matching uses the mask's JSON string
+spelling and leaves JSON syntax intact. Streaming can join adjacent
+fragments of the same argument. Choose placeholders that cannot occur
+as ordinary text or object keys in a reply.
 
 Masking runs at the gateway's normal request boundary for both built-in and
 installed engines. Provider middleware and model system prompts added later
 are sent as configured.
 
-An engine can declare `replyNotice: true` and export `renderNotice(values, linkTarget)`,
-where `values` maps masks to originals restored in visible assistant text.
-Magpie appends the returned text at the end of a successful, single-choice
+An engine can declare `replyNotice: true`. Magpie formats the values restored
+in visible assistant text and appends a notice at the end of a successful, single-choice
 Chat Completions reply, including a streaming reply. JSON, structured output,
-tool calls and reasoning fields do not get a notice. If rendering fails, the
-restored reply is delivered without it. The notice starts with a blank line,
-a single heading line, and another blank line, followed by list entries in
-the form `- [value](linkTarget "mask")`. Each entry uses the supplied fragment
-as its link destination. Magpie uses it to remove the notice from assistant
-history at ingress, including after an engine switch or a masking opt-out.
+tool calls and reasoning fields do not get a notice. Each listed value links
+to the reserved `#magpie-privacy-notice` fragment and shows its mask on hover.
+Magpie removes these notices from assistant history at ingress, including
+after an engine switch or a masking opt-out.
 
 Magpie retains its own custom rules, exceptions, category actions and
 alternate unmasked route when switching engines. These settings apply to its
@@ -118,9 +123,9 @@ Disabling or removing the selected plugin, a conflicting engine ID, or a
 failed protection call stops requests requiring that engine. Select another
 engine to resume. Insights → Masking keeps the engine ID and name across
 switches and uninstalls. Plugin records show diagnostics without a lookup
-of original values. Prompt inspection reads the protected request. Recent
-Calls and body archives omit plugin-protected conversation bodies because
-those recorders use Magpie's own scrubbing rules.
+of original values. Prompt inspection, Recent Calls and enabled archives reuse
+the protected chat request. Reply and transcript capture for plugin-protected
+requests remains off because those paths may see restored values.
 
 See [registration](../../internal/privacyengine/engine.go),
 [manifest validation](../../internal/plugin/privacy.go), and the

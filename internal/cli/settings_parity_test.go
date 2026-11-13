@@ -373,6 +373,7 @@ var notYet = map[string]string{
 	"POST /api/masking/clear":                    U,  // masking.go
 	"POST /api/masking/preview":                  U,  // masking.go
 	"POST /api/masking/values":                   U,  // masking.go
+	"POST /api/privacy-engine":                   S2, // masking.go: checks that the installed engine can start
 	"GET /api/library/bili":                      L,  // library.go
 	"GET /api/library/icon":                      W,  // library.go
 	"GET /api/library/market/servers":            L,  // library.go

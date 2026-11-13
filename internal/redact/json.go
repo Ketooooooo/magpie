@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // kept are the keys whose strings are left alone: ids, names and kinds the
@@ -581,10 +583,15 @@ func restoreJSON(body []byte, put map[string]int, replace restoreText, notice *c
 		replace = restore
 	}
 	typ := typeOf(body)
-	signed := signedReplyFields(body, local)
+	var signed, args []string
+	protocol := false
+	if local {
+		signed, args, _ = scan(body)
+		protocol = replyEnvelope(body, typ)
+	}
 	choice := notice.choice(body, "message")
 	out, ok := walk(body, func(path, key, s string) string {
-		if local && (sealedText(key, s) || privateReplyField(path, key, typ, signed)) {
+		if local && (sealedText(key, s) || privateReplyField(path, key, typ, protocol, signed, args)) {
 			return s
 		}
 		if path == chatMessageText && choice.Exists() {
@@ -593,7 +600,13 @@ func restoreJSON(body []byte, put map[string]int, replace restoreText, notice *c
 			notice.record(s, text, count, put)
 			return text
 		}
-		return replace(s, asJSON(key, typ), put)
+		escaped := asJSON(key, typ)
+		if local && escaped {
+			return editArgument(s, argumentQuote{}, func(text string, _ bool) string {
+				return replace(text, true, put)
+			})
+		}
+		return replace(s, escaped, put)
 	})
 	if !ok {
 		if local {
@@ -604,16 +617,85 @@ func restoreJSON(body []byte, put map[string]int, replace restoreText, notice *c
 	return notice.append(out, choice, "message")
 }
 
-func signedReplyFields(body []byte, local bool) []string {
-	if !local {
-		return nil
+func replyEnvelope(body []byte, typ string) bool {
+	switch {
+	case strings.HasPrefix(typ, "response."), strings.HasPrefix(typ, "message_"), strings.HasPrefix(typ, "content_block_"):
+		return true
+	case typ == "message":
+		return gjson.GetBytes(body, "content").IsArray()
 	}
-	signed, _, _ := scan(body)
-	return signed
+	obj := gjson.GetBytes(body, "object").String()
+	return strings.HasPrefix(obj, "chat.completion") || obj == "response" ||
+		gjson.GetBytes(body, "choices").IsArray() || gjson.GetBytes(body, "candidates").IsArray()
 }
 
-func privateReplyField(path, key, typ string, signed []string) bool {
-	return under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning")
+func privateReplyField(path, key, typ string, protocol bool, signed, args []string) bool {
+	return under(path, signed) || key == "thinking" || strings.HasPrefix(typ, "response.reasoning") ||
+		protocol && !under(path, args) && (kept[key] || isID(key) || key == "obfuscation")
+}
+
+type argumentQuote struct {
+	inString bool
+	escape   int // -1 after a backslash, positive for remaining Unicode escape digits
+}
+
+// argumentStrings visits the literal contents of JSON strings, excluding their
+// quotes and any numbers, booleans or punctuation between strings.
+func argumentStrings(s string, state argumentQuote, visit func(start, end int, open bool)) argumentQuote {
+	start := 0
+	for i := 0; i < len(s); i++ {
+		if state.escape != 0 {
+			if state.escape == -1 {
+				state.escape = 0
+				if s[i] == 'u' {
+					state.escape = 4
+				}
+			} else {
+				state.escape--
+			}
+			if start == i {
+				start = i + 1 // the beginning of this escape went in an earlier event
+			}
+			continue
+		}
+		switch s[i] {
+		case '\\':
+			if state.inString {
+				state.escape = -1
+			}
+		case '"':
+			if state.inString {
+				if visit != nil {
+					visit(start, i, false)
+				}
+			} else {
+				start = i + 1
+			}
+			state.inString = !state.inString
+		}
+	}
+	if state.inString && visit != nil {
+		visit(start, len(s), true)
+	}
+	return state
+}
+
+func editArgument(s string, state argumentQuote, edit func(string, bool) string) string {
+	var out strings.Builder
+	last := 0
+	argumentStrings(s, state, func(start, end int, open bool) {
+		text := edit(s[start:end], open)
+		if text != s[start:end] {
+			out.WriteString(s[last:start])
+			out.WriteString(text)
+			last = end
+		}
+	})
+	if last == 0 {
+		return s
+	}
+	out.WriteString(s[last:])
+	return out.String()
 }
 
 // heldIn says b may have a placeholder of a value held, in any of the

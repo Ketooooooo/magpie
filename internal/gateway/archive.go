@@ -110,7 +110,9 @@ func archiving(r *http.Request, res *captureResponseWriter, start time.Time, bod
 	}
 	name, id := archiveID(start)
 	res.Header().Set(ArchiveHeader, id)
-	res.full = &spool{limit: archiveLimit()}
+	if !res.omitBody {
+		res.full = &spool{limit: archiveLimit()}
+	}
 	return &wire{name: name, method: r.Method, path: r.URL.Path,
 		query: r.URL.RawQuery, req: r.Header.Clone(), body: body, res: res, to: to}
 }
@@ -238,6 +240,9 @@ func archive(c Call) {
 	w.body = nil
 	res := w.res.full
 	w.res.full = nil
+	if w.res.omitBody {
+		c.Error, c.Fallback = "", ""
+	}
 	if res == nil {
 		res = &spool{}
 	}

@@ -358,8 +358,6 @@ let listWait = 20 * 1000
 // magpie then starts a new host for the calls to come and stops this one
 // once its own are answered (host.go's heavyMB and recycle). It checks
 // every heavy.everyMillis, from heavy.afterMillis after the host started.
-let privacyMemoryMiB = 0
-
 function watchHeavy(heavy) {
   const mb = Number(heavy?.mb)
   if (!(mb > 0)) return
@@ -367,11 +365,10 @@ function watchHeavy(heavy) {
   const after = Math.max(Number(heavy.afterMillis) || 0, 0)
   const rss = () => process.memoryUsage().rss / 1048576
   const timer = setInterval(() => {
-    const limit = mb + privacyMemoryMiB
-    if (process.uptime() * 1000 < after || rss() <= limit) return
+    if (process.uptime() * 1000 < after || rss() <= mb) return
     Bun.gc(true)
     const held = rss()
-    if (held <= limit) return
+    if (held <= mb) return
     clearInterval(timer)
     send({ event: "heavy", count: Math.round(held) })
   }, every)
@@ -3528,15 +3525,7 @@ const handlers = {
     const entry = await import(pathToFileURL(p.entry).href)
     if (typeof entry.protect !== "function") throw new Error("Privacy plugin exports no protect function")
     signal.throwIfAborted()
-    const result = await entry.protect(p.fragments, { directory: p.directory, preview: p.preview, signal })
-    // The selected engine can keep a native model resident in the shared host.
-    privacyMemoryMiB = Math.max(privacyMemoryMiB, p.memoryMiB || 0)
-    return result
-  },
-  async privacyNotice(p, signal) {
-    const entry = await import(pathToFileURL(p.entry).href)
-    signal.throwIfAborted()
-    return typeof entry.renderNotice === "function" ? await entry.renderNotice(p.values, p.linkTarget) : ""
+    return entry.protect(p.fragments, { directory: p.directory, preview: p.preview, signal })
   },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {

@@ -1,15 +1,16 @@
 package privacyengine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/redact"
 )
 
@@ -30,11 +31,13 @@ type protectBatch func(context.Context, []redact.Fragment) ([]scanReport, error)
 
 // A masker protects one batch before its restoration map is used by Writer.
 type pluginMasker struct {
-	name   string
-	scan   protectBatch
-	ctx    context.Context
-	values map[string]string
-	notice func(context.Context, map[string]string) string
+	name        string
+	scan        protectBatch
+	ctx         context.Context
+	values      map[string]string
+	masks       map[byte][]maskSpelling
+	escaped     map[byte][]maskSpelling
+	replyNotice bool
 }
 
 func newPluginMasker(ctx context.Context, name string, scan protectBatch) *pluginMasker {
@@ -50,11 +53,10 @@ type scanReport struct {
 		Value      string `json:"value"`
 		Mask       string `json:"placeholder"`
 		Category   string `json:"category"`
+		By         string `json:"by"`
 		Reversible bool   `json:"reversible"`
 	} `json:"changes"`
 }
-
-var maskToken = lazyre.New(`\{\{[A-Z0-9_]+_[a-z2-7]+\}\}`)
 
 func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment) ([]string, []gwmw.Hit) {
 	var pending []redact.Fragment
@@ -100,15 +102,19 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 			protected.WriteString(change.Mask)
 			last = change.End
 			if change.Reversible {
-				if change.Mask == "" || maskToken.FindString(change.Mask) != change.Mask {
-					panic(errors.New("The privacy plugin returned an unsupported reversible mask"))
+				if change.Mask == "" || !utf8.ValidString(change.Mask) {
+					panic(errors.New("The privacy plugin returned an invalid reversible mask"))
 				}
 				if value, found := m.values[change.Mask]; found && value != change.Value {
 					panic(errors.New("The privacy plugin returned a conflicting mask"))
 				}
 				m.values[change.Mask] = change.Value
 			}
-			hits = append(hits, gwmw.Hit{Kind: change.Category, By: "rule", Placeholder: change.Mask})
+			by := change.By
+			if by == "" {
+				by = "unknown"
+			}
+			hits = append(hits, gwmw.Hit{Kind: change.Category, By: by, Placeholder: change.Mask})
 		}
 		protected.WriteString(f.Text[last:])
 		if protected.String() != report.Protected {
@@ -116,6 +122,7 @@ func (m *pluginMasker) protect(ctx context.Context, fragments []redact.Fragment)
 		}
 		texts = append(texts, report.Protected)
 	}
+	m.indexMasks()
 	return texts, hits
 }
 
@@ -161,37 +168,94 @@ func (m *pluginMasker) Restore(text string, escaped bool) string {
 }
 
 func (m *pluginMasker) restore(text string, escaped bool, put map[string]int) string {
-	return maskToken.ReplaceAllStringFunc(text, func(token string) string {
-		value, ok := m.Value(token)
-		if !ok {
-			return token
-		}
+	var out strings.Builder
+	last := 0
+	m.walkMasks(text, escaped, false, func(at, length int, token string) {
+		out.WriteString(text[last:at])
+		value := m.values[token]
 		if put != nil {
 			put[token]++
 		}
 		if escaped {
-			raw, _ := json.Marshal(value)
-			return string(raw[1 : len(raw)-1])
+			value = jsonStringContents(value)
 		}
-		return value
+		out.WriteString(value)
+		last = at + length
 	})
+	if last == 0 {
+		return text
+	}
+	out.WriteString(text[last:])
+	return out.String()
 }
 
-// partialTail only holds suffixes that can finish a mask from this request.
-func (m *pluginMasker) partialTail(text string) int {
-	last := strings.LastIndexByte(text, '{')
-	if last > 0 && text[last-1] == '{' {
-		tail := text[last-1:]
-		for token := range m.values {
-			if len(tail) < len(token) && strings.HasPrefix(token, tail) {
-				return len(tail)
+type maskSpelling struct {
+	token, text string
+}
+
+func (m *pluginMasker) indexMasks() {
+	if len(m.values) == 0 {
+		return
+	}
+	m.masks, m.escaped = make(map[byte][]maskSpelling), make(map[byte][]maskSpelling)
+	for token := range m.values {
+		escaped := jsonStringContents(token)
+		m.masks[token[0]] = append(m.masks[token[0]], maskSpelling{token, token})
+		m.escaped[escaped[0]] = append(m.escaped[escaped[0]], maskSpelling{token, escaped})
+	}
+}
+
+func jsonStringContents(text string) string {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(text)
+	return b.String()[1 : b.Len()-2]
+}
+
+// walkMasks matches the longest registered literal at each position. Streaming
+// holds a suffix only where a longer mask could still complete.
+func (m *pluginMasker) walkMasks(text string, escaped, hold bool, found func(int, int, string)) int {
+	masks := m.masks
+	if escaped {
+		masks = m.escaped
+	}
+	for at := 0; at < len(text); {
+		remaining := text[at:]
+		match := ""
+		matchLen := 0
+		for _, mask := range masks[text[at]] {
+			if hold && len(remaining) < len(mask.text) && strings.HasPrefix(mask.text, remaining) {
+				return len(remaining)
+			}
+			if len(mask.text) > matchLen && strings.HasPrefix(remaining, mask.text) {
+				match, matchLen = mask.token, len(mask.text)
 			}
 		}
-	}
-	if last >= 0 && last == len(text)-1 {
-		return 1
+		if matchLen == 0 {
+			if escaped && text[at] == '\\' {
+				// An unmatched JSON escape is a single unit. Its spelling
+				// must never be mistaken for a mask such as "n" or "0".
+				size := 2
+				if len(remaining) > 1 && remaining[1] == 'u' {
+					size = 6
+				}
+				at += min(size, len(remaining))
+			} else {
+				at++
+			}
+			continue
+		}
+		if found != nil {
+			found(at, matchLen, match)
+		}
+		at += matchLen
 	}
 	return 0
+}
+
+func (m *pluginMasker) partialTail(text string, escaped bool) int {
+	return m.walkMasks(text, escaped, true, nil)
 }
 
 func (m *pluginMasker) Writer(w http.ResponseWriter) (http.ResponseWriter, func()) {
@@ -207,7 +271,7 @@ func (m *pluginMasker) replyWriter(w http.ResponseWriter, present bool) (http.Re
 		return w, func() {}
 	}
 	var notice func(map[string]int) string
-	if present && m.notice != nil {
+	if present && m.replyNotice {
 		notice = func(put map[string]int) string {
 			values := make(map[string]string, len(put))
 			for token := range put {
@@ -215,9 +279,7 @@ func (m *pluginMasker) replyWriter(w http.ResponseWriter, present bool) (http.Re
 					values[token] = value
 				}
 			}
-			ctx, cancel := context.WithTimeout(m.ctx, time.Second)
-			defer cancel()
-			return m.notice(ctx, values)
+			return redact.FormatReplyNotice(values)
 		}
 	}
 	writer := redact.NewRestoringWriter(w, m.restore, m.partialTail, notice)

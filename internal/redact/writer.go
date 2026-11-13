@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 // Writer puts the values back in what a vendor answers, on its way to the
@@ -24,9 +26,10 @@ type Writer struct {
 	pending *held
 	done    bool
 	replace restoreText
-	tail    func(string) int
+	tail    func(string, bool) int
 	put     map[string]int // placeholders put back, each place counted
 	notice  *chatNotice
+	quotes  map[string]argumentQuote
 }
 
 const (
@@ -41,14 +44,17 @@ const (
 type held struct {
 	ctx       string
 	tails     map[string]string
-	full, cut []byte // the event as it is, and without the tails
+	args      map[string]string
+	full, cut []byte // built-in's full event, and the event without the tails
 }
 
 // NewWriter wraps w; Finish must be called when the handler is done.
-func NewWriter(w http.ResponseWriter) *Writer { return &Writer{w: w, tail: partialTail} }
+func NewWriter(w http.ResponseWriter) *Writer {
+	return &Writer{w: w, tail: func(text string, _ bool) int { return partialTail(text) }}
+}
 
 // NewRestoringWriter frames replies for a request-bound engine.
-func NewRestoringWriter(w http.ResponseWriter, replace restoreText, tail func(string) int, renderNotice func(map[string]int) string) *Writer {
+func NewRestoringWriter(w http.ResponseWriter, replace restoreText, tail func(string, bool) int, renderNotice func(map[string]int) string) *Writer {
 	rw := &Writer{w: w, replace: replace, tail: tail}
 	if renderNotice != nil {
 		rw.notice = &chatNotice{render: renderNotice}
@@ -218,12 +224,13 @@ func (rw *Writer) Finish() {
 			rw.w.Write(restoreJSON(rw.buf.Bytes(), rw.count(), rw.replace, rw.notice))
 		}
 	case stream:
-		if rw.pending != nil {
-			rw.w.Write(rw.pending.full)
-			rw.pending = nil
-		}
+		_ = rw.release()
 		if rw.buf.Len() > 0 {
-			rw.w.Write([]byte(rw.restore(rw.buf.String(), false, rw.count())))
+			if rw.replace == nil {
+				rw.w.Write([]byte(rw.restore(rw.buf.String(), false, rw.count())))
+			} else {
+				rw.w.Write(rw.buf.Bytes())
+			}
 		}
 	}
 	rw.Flush()
@@ -249,6 +256,10 @@ func (rw *Writer) event(ev []byte) error {
 		if err := rw.release(); err != nil {
 			return err
 		}
+		if rw.replace != nil {
+			_, err := rw.w.Write(ev)
+			return err
+		}
 		_, err := rw.w.Write([]byte(rw.restore(string(ev), false, rw.count())))
 		return err
 	}
@@ -264,18 +275,13 @@ func (rw *Writer) event(ev []byte) error {
 	// the starts of placeholders the last event ended in go on here
 	var carry map[string]string
 	if p := rw.pending; p != nil {
-		if p.ctx == ctx && hasPaths(data, p.tails) {
+		if p.ctx == ctx && hasPaths(data, p.tails) && sameStreamArguments(data, name, p.args) {
 			if _, err := rw.w.Write(p.cut); err != nil {
 				return err
 			}
 			carry = p.tails
-		} else {
-			if rw.notice != nil && p.tails[chatDeltaText] != "" {
-				rw.notice.skip = true // the previous text tail was sent as written
-			}
-			if _, err := rw.w.Write(p.full); err != nil {
-				return err
-			}
+		} else if err := rw.release(); err != nil {
+			return err
 		}
 		rw.pending = nil
 	}
@@ -283,43 +289,91 @@ func (rw *Writer) event(ev []byte) error {
 	if typ == "" {
 		typ = name
 	}
-	signed := signedReplyFields(data, rw.replace != nil)
+	var signed, args []string
+	protocol := false
+	if rw.replace != nil {
+		signed, args, _ = scan(data)
+		protocol = replyEnvelope(data, typ)
+	}
 	choice := rw.notice.choice(data, "delta")
+	finished := choice.Get("finish_reason").String() != ""
 	var tails, cuts map[string]string
+	var heldArgs map[string]string
 	restored, valid := walk(data, func(path, key, s string) string {
 		masked := s
 		if c, ok := carry[path]; ok {
 			s = c + s
 		}
 		if sealedText(key, s) || rw.replace != nil &&
-			privateReplyField(path, key, typ, signed) {
+			privateReplyField(path, key, typ, protocol, signed, args) {
 			return s
 		}
+		escaped := asJSON(key, typ)
+		if rw.replace != nil && escaped {
+			identity := streamArgument(data, name, typ, path, key)
+			state := rw.quotes[identity]
+			var n int
+			if identity != "" && rw.tail != nil {
+				argumentStrings(s, state, func(start, end int, open bool) {
+					if open {
+						n = rw.tail(s[start:end], true)
+					}
+				})
+			}
+			if n > 0 {
+				if tails == nil {
+					tails = make(map[string]string)
+				}
+				tails[path] = s[len(s)-n:]
+				s = s[:len(s)-n]
+			}
+			if identity != "" {
+				next := argumentStrings(s, state, nil)
+				if rw.quotes == nil {
+					rw.quotes = make(map[string]argumentQuote)
+				}
+				rw.quotes[identity] = next
+				if n > 0 {
+					if heldArgs == nil {
+						heldArgs = make(map[string]string)
+					}
+					heldArgs[path] = identity
+				}
+			}
+			return editArgument(s, state, func(text string, _ bool) string {
+				return rw.restore(text, true, rw.count())
+			})
+		}
+		visibleText := path == chatDeltaText && choice.Exists()
 		// the tail is looked for before anything is put back, so a
 		// placeholder whose last brace is still to come isn't put back
 		// without it and the brace left behind
-		if rw.tail != nil && !kept[key] && key != "obfuscation" {
-			if n := rw.tail(s); n > 0 {
+		if rw.tail != nil && (!kept[key] || rw.replace != nil) && key != "obfuscation" &&
+			(!visibleText || !finished) {
+			if n := rw.tail(s, escaped); n > 0 {
 				if tails == nil {
-					tails, cuts = map[string]string{}, map[string]string{}
+					tails = make(map[string]string)
 				}
 				tails[path] = s[len(s)-n:]
-				cuts[path] = rw.restore(s[:len(s)-n], asJSON(key, typ), nil)
+				if rw.replace == nil {
+					if cuts == nil {
+						cuts = make(map[string]string)
+					}
+					cuts[path] = rw.restore(s[:len(s)-n], escaped, nil)
+				} else {
+					s = s[:len(s)-n] // count held masks only when written
+				}
 			}
 		}
 		// counted here only: cut is s again without its tail, and
 		// whichever of the two goes out, the places are these
-		if path == chatDeltaText && choice.Exists() {
+		if visibleText {
 			put := make(map[string]int)
 			text := rw.restore(s, false, put)
-			emitted := text
-			if cut, ok := cuts[path]; ok {
-				emitted = cut
-			}
-			rw.notice.record(masked, emitted, put, rw.count())
+			rw.notice.record(masked, text, put, rw.count())
 			return text
 		}
-		return rw.restore(s, asJSON(key, typ), rw.count())
+		return rw.restore(s, escaped, rw.count())
 	})
 	if valid && tails[chatDeltaText] == "" {
 		restored = rw.notice.append(restored, choice, "delta")
@@ -328,6 +382,10 @@ func (rw *Writer) event(ev []byte) error {
 	if tails == nil {
 		_, err := rw.w.Write(full)
 		return err
+	}
+	if rw.replace != nil {
+		rw.pending = &held{ctx: ctx, tails: tails, args: heldArgs, cut: full}
+		return nil
 	}
 	cutData, _ := walk(restored, func(path, _, s string) string {
 		if c, ok := cuts[path]; ok {
@@ -372,10 +430,87 @@ func holding() bool {
 func (rw *Writer) release() error {
 	if p := rw.pending; p != nil {
 		rw.pending = nil
-		_, err := rw.w.Write(p.full)
+		full := p.full
+		if full == nil {
+			name, data, pre, post, _ := splitEvent(p.cut)
+			typ := typeOf(data)
+			if typ == "" {
+				typ = name
+			}
+			choice := rw.notice.choice(data, "delta")
+			out, _ := walk(data, func(path, key, s string) string {
+				tail, ok := p.tails[path]
+				if !ok {
+					return s
+				}
+				if path == chatDeltaText && choice.Exists() {
+					put := make(map[string]int)
+					text := rw.restore(tail, false, put)
+					rw.notice.record("", text, put, rw.count())
+					return s + text
+				}
+				if identity, ok := p.args[path]; ok {
+					state := rw.quotes[identity]
+					rw.quotes[identity] = argumentStrings(tail, state, nil)
+					return s + editArgument(tail, state, func(text string, _ bool) string {
+						return rw.restore(text, true, rw.count())
+					})
+				}
+				return s + rw.restore(tail, asJSON(key, typ), rw.count())
+			})
+			full = rebuild(pre, out, post)
+		}
+		_, err := rw.w.Write(full)
 		return err
 	}
 	return nil
+}
+
+// streamArgument keys each JSON argument stream by its protocol tool identity.
+// A whole argument object has no stream identity and starts outside a string.
+func streamArgument(data []byte, name, typ, path, key string) string {
+	if key == "delta" && typ == "response.function_call_arguments.delta" {
+		return "response/" + gjson.GetBytes(data, "item_id").String() + "/" + gjson.GetBytes(data, "output_index").String()
+	}
+	if key == "partial_json" && (name == "content_block_delta" || typ == "content_block_delta") {
+		return "block/" + gjson.GetBytes(data, "index").String()
+	}
+	parts := strings.Split(path, ".")
+	if len(parts) >= 4 && parts[0] == "choices" && parts[2] == "delta" && key == "arguments" {
+		choice := strings.Join(parts[:2], ".")
+		id := "chat/" + streamIndex(data, choice, parts[1])
+		if len(parts) == 7 && parts[3] == "tool_calls" && parts[5] == "function" {
+			return id + "/" + streamIndex(data, strings.Join(parts[:5], "."), parts[4])
+		}
+		if len(parts) == 5 && parts[3] == "function_call" {
+			return id + "/legacy"
+		}
+	}
+	return ""
+}
+
+func streamIndex(data []byte, path, fallback string) string {
+	if index := gjson.GetBytes(data, path+".index"); index.Exists() {
+		return index.String()
+	}
+	return fallback
+}
+
+func sameStreamArguments(data []byte, name string, args map[string]string) bool {
+	if len(args) == 0 {
+		return true
+	}
+	typ := typeOf(data)
+	if typ == "" {
+		typ = name
+	}
+	for path, identity := range args {
+		key := path[strings.LastIndexByte(path, '.')+1:]
+		if streamArgument(data, name, typ, path, key) != identity {
+			return false
+		}
+	}
+	return true
 }
 
 func rebuild(pre, data, post []byte) []byte {
