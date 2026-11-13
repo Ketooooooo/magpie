@@ -47,7 +47,7 @@ const (
 func wbSearches(p provider.Provider) bool { return drawsWorkBuddy(p) }
 
 // wbSearch asks p's WorkBuddy site to search the web.
-func (s *Server) wbSearch(ctx context.Context, p provider.Provider, query string) (string, []Hit, error) {
+func (s *Server) wbSearch(ctx context.Context, p provider.Provider, query string) (said string, hits []Hit, err error) {
 	origin := p.Origin(ctx)
 	if origin == "" {
 		return "", nil, fmt.Errorf("%s: no site to search with", p.Name)
@@ -55,10 +55,11 @@ func (s *Server) wbSearch(ctx context.Context, p provider.Provider, query string
 	// its client gives the service 20 s
 	ctx, cancel := context.WithTimeout(s.metered(p.Via(ctx), p, ""), searchTimeout/2)
 	defer cancel()
-	q, err := maskedQuery(ctx, query, &p)
+	q, session, err := maskedQuery(ctx, query, &p)
 	if err != nil {
 		return "", nil, err
 	}
+	defer finishSearchPrivacy(ctx, session, &said, &err)
 	// as many as its client asks for, unless the search named more
 	n := searchCount(ctx)
 	ask := wbSearchResults
@@ -127,7 +128,7 @@ func (s *Server) wbSearch(ctx context.Context, p provider.Provider, query string
 	if len(pages) == 0 {
 		return "", nil, fmt.Errorf("%s found nothing", p.Name)
 	}
-	said, hits := pagesSaid(pages)
+	said, hits = pagesSaid(pages)
 	return said, hits, nil
 }
 

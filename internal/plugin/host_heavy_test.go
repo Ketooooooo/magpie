@@ -62,7 +62,7 @@ func TestHeavyHostIsReplaced(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	if err := Call(ctx, "providers", map[string]any{}, nil); err != nil {
+	if err := callHost(ctx, "providers", map[string]any{}, nil); err != nil {
 		t.Fatalf("a call after the heavy host was replaced: %v", err)
 	}
 }

@@ -32,7 +32,7 @@ import (
 	"github.com/yetone/magpie/internal/claudecode"
 	"github.com/yetone/magpie/internal/daemon"
 	"github.com/yetone/magpie/internal/library"
-	"github.com/yetone/magpie/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/shortcut"
@@ -88,7 +88,7 @@ var (
 	autostartOff   = func() error { return autostart.Set(false) }
 	removeShortcut = shortcut.Remove
 	removeScheme   = unregisterScheme
-	endPII         = pii.Remove
+	endPII         = privacyengine.RemoveBuiltinModels
 	forgetInstall  = update.ForgetInstallDir
 	executable     = os.Executable
 	wired          = (*agent.Agent).Wired

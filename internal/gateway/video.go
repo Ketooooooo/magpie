@@ -1218,12 +1218,16 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	s.record(call)
 	if remote {
-		obj, _ := asOurs(b, p, remoteVideoID(p, theirs, start))
+		id := remoteVideoID(p, theirs, start)
+		s.privacyTasks.Remember(privacyTaskKey(r, "video", id), hits.engine, hits.hits)
+		obj, _ := asOurs(b, p, id)
 		writeJSON(w, 200, obj)
 		return
 	}
 	if custom {
-		obj, _ := asOurs(b, p, customVideoID(p, theirs, start))
+		id := customVideoID(p, theirs, start)
+		s.privacyTasks.Remember(privacyTaskKey(r, "video", id), hits.engine, hits.hits)
+		obj, _ := asOurs(b, p, id)
 		if _, ok := obj["model"]; !ok {
 			obj["model"] = p.ID + "/" + model
 		}
@@ -1234,6 +1238,7 @@ func (s *Server) videosCreate(w http.ResponseWriter, r *http.Request) {
 	if onKey {
 		id = strings.TrimSuffix(id, "."+signer(p)) + "." + keyMark(p)
 	}
+	s.privacyTasks.Remember(privacyTaskKey(r, "video", id), hits.engine, hits.hits)
 	writeJSON(w, 200, videoObject(id, p.ID+"/"+model, start, videoState{}, f))
 }
 
@@ -1416,9 +1421,6 @@ func (s *Server) openAIVideo(ctx context.Context, p provider.Provider, vendorID,
 
 // videosGet answers how a video is going.
 func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
-	// A later poll can echo the prompt masked when the video was created.
-	w, done := restoring(w)
-	defer done()
 	id := r.PathValue("id")
 	p, vendorID, started, err := videoMaker(id)
 	if err != nil {
@@ -1430,6 +1432,8 @@ func (s *Server) videosGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, provider.Chat, 403, held)
 		return
 	}
+	w, finish := s.privacyTasks.WrapReply(w, privacyTaskKey(r, "video", id))
+	defer finish()
 	ctx, cancel := drawWithin(r.Context(), videoTimeout)
 	defer cancel()
 	if filmsOpenAI(p) {

@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 

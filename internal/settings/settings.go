@@ -32,7 +32,7 @@ import (
 	"github.com/yetone/magpie/internal/fonts"
 	"github.com/yetone/magpie/internal/lastgood"
 	"github.com/yetone/magpie/internal/lazyre"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/steady"
 )
 

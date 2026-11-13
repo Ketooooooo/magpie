@@ -432,7 +432,7 @@ func (s *Server) askJev(ctx context.Context, wait time.Duration, p provider.Prov
 func maskedState(ctx context.Context, text, user, reply string) (string, string, string, error) {
 	out := [3]string{text, user, reply}
 	m, hits, err := maskTexts(ctx, out[:])
-	closeMasker(m)
+	m.Close()
 	if err != nil {
 		return "", "", "", err
 	}

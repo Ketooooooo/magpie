@@ -7,7 +7,7 @@ import (
 
 	"github.com/yetone/magpie/internal/beat"
 	"github.com/yetone/magpie/internal/filememo"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"

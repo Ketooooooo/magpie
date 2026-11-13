@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/filememo"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 func TestRoundTrip(t *testing.T) {

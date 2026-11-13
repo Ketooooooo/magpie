@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/codexcat"
-	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -1381,7 +1381,7 @@ func TestCodexOwnSignInKeepsItsMaskingTime(t *testing.T) {
 	})
 	withoutMasker(t)
 	m := heldMasker{let: make(chan struct{}), entered: make(chan struct{}), once: new(sync.Once)}
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 	const hold = 120 * time.Millisecond
 	go func() {
 		<-m.entered

@@ -22203,7 +22203,6 @@ const MASK_BY = { rule: "Rules", yours: "Your rules", word: "Your words", model:
 const SHIELD = "M8 1.8 13 3.6v4.1c0 3-2.1 5.4-5 6.5-2.9-1.1-5-3.5-5-6.5V3.6Z";
 const PLACEHOLDER = /\{\{[^{}\s]{1,64}\}\}/g;
 let maskSum = null;          // the summary Insights › Masking read last: its kinds' colours
-const maskValues = new Map(); // placeholder → what it stood for, as this magpie told it
 const maskKindName = (k) => MASK_KINDS[k] ? t(MASK_KINDS[k]) : k;
 const maskByName = (b) => MASK_BY[b] ? t(MASK_BY[b]) : b;
 // a kind's colour is its place in the summary's ranking, so the bar, the
@@ -22225,17 +22224,6 @@ function maskDot(k) {
   return d;
 }
 
-// maskValue: what placeholder p stood for, or null where this magpie no
-// longer knows. A value it doesn't know isn't kept as such: the same value
-// masked again after a restart is known again.
-function maskValue(p) {
-  if (maskValues.has(p)) return Promise.resolve(maskValues.get(p));
-  return api("masking/value?p=" + encodeURIComponent(p)).then((r) => {
-    if (typeof r?.value !== "string") return null;
-    maskValues.set(p, r.value);
-    return r.value;
-  }).catch(() => null);
-}
 // maskTip shows what a masked value was beside it, while it is pointed at
 // or focused: its kind, who found it, and the value itself, asked for then
 let maskTipEl = null;
@@ -22257,7 +22245,7 @@ function maskTip(anchor, v) {
     tip.style.top = (above > 8 ? above : a.bottom + 8) + "px";
   };
   place();
-  maskValue(v.p).then((s) => {
+  Promise.resolve(v.value()).then((s) => {
     if (maskTipEl !== tip) return;
     if (s === null) {
       val.className = "v gone";
@@ -22281,16 +22269,6 @@ function maskSnipTexts(r) {
   const core = (x) => x.replace(/^…|…$/g, "");
   const all = [...new Set(Object.values(r.snips || {}))];
   return all.filter((x, i) => !all.some((y, j) => j != i && (y.length > x.length || y.length == x.length && j < i) && y.includes(core(x))));
-}
-// maskPlace: a placeholder as the text carried it, in its kind's colour,
-// what it stood for shown while pointed at
-function maskPlace(cls, p, x) {
-  const kind = x?.k || p.slice(2, -2).replace(/_[^_]*$/, "");
-  const mark = el("mark", cls, p);
-  mark.style.setProperty("--k", maskColor(kind));
-  mark.tabIndex = 0;
-  maskTipOn(mark, { p, kind, by: x?.b || "known" });
-  return mark;
 }
 // maskedBadge: what masking swapped in one request (gateway's Masked), for
 // Recent calls and the Routing page; it opens that request's record

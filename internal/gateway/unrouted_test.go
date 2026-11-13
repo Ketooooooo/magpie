@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"context"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -249,7 +250,7 @@ func TestUnroutedMaskingNotCutOff(t *testing.T) {
 	var once sync.Once
 	open := func() { once.Do(func() { close(m.gate) }) }
 	t.Cleanup(open)
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	got := posted(srv, strings.NewReader(unroutedHi))
@@ -495,7 +496,7 @@ func TestUnroutedMostLeavesOutMasking(t *testing.T) {
 	var once sync.Once
 	open := func() { once.Do(func() { close(m.gate) }) }
 	t.Cleanup(open)
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	got := posted(srv, strings.NewReader(pastedImage))
@@ -592,7 +593,7 @@ func TestUnroutedCodexPathShowsItsModel(t *testing.T) {
 	var once sync.Once
 	open := func() { once.Do(func() { close(m.gate) }) }
 	t.Cleanup(open)
-	t.Cleanup(gwmw.Mask(m))
+	t.Cleanup(privacyengine.RegisterBuiltinForTest(m))
 	srv := httptest.NewServer(s.Handler())
 	t.Cleanup(srv.Close)
 	t.Cleanup(open) // before srv.Close, which waits on the held request

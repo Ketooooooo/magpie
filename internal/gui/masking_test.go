@@ -2,18 +2,16 @@ package gui
 
 import (
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/maskrec"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -30,9 +28,8 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	if err := settings.Save(settings.Settings{Redact: true}); err != nil {
 		t.Fatal(err)
 	}
-	defer gwmw.Mask(masking.Masker{})()
-	m, _ := gwmw.Served()
-	sent, hits := m.(gwmw.Teller).TextHits("my key is " + key)
+	defer privacyengine.EnableBuiltin()()
+	sent, hits := privacyengine.BuiltinForTest().TextHits("my key is " + key)
 	if len(hits) != 1 || strings.Contains(sent, key) {
 		t.Fatalf("masked %q %+v", sent, hits)
 	}
@@ -40,7 +37,7 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	rec := maskrec.Add(maskrec.Record{What: "chat", Agent: "claude", Provider: "anthropic", N: 1,
 		Values: []maskrec.Value{{Placeholder: p, Kind: hits[0].Kind, By: hits[0].By, Head: hits[0].Head, Len: hits[0].Len}},
 		Snips:  map[string]string{p: sent}})
-	other := maskrec.Add(maskrec.Record{What: "search", N: 1, Values: []maskrec.Value{{Placeholder: "{{EMAIL_00000000}}", Kind: "EMAIL", By: redact.ByRule}}})
+	other := maskrec.Add(maskrec.Record{What: "search", N: 1, Values: []maskrec.Value{{Placeholder: "{{EMAIL_00000000}}", Kind: "EMAIL", By: "rule"}}})
 
 	srv := webPageHandler(t, webHost{func() {}}, nil)
 	get := func(path string, into any) int {
@@ -56,6 +53,15 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	var sum maskrec.Summary
 	if get("/api/masking/summary?days=7", &sum); sum.Requests < 2 || len(sum.Days) != 7 {
 		t.Fatalf("summary %+v", sum)
+	}
+	found := false
+	for _, value := range sum.Values {
+		if value.Placeholder == p {
+			found = value.RecordKey == rec.Key
+		}
+	}
+	if !found {
+		t.Fatal("masking summary must identify the record for its value preview")
 	}
 	var page struct {
 		Records []maskedRecord `json:"records"`
@@ -89,13 +95,6 @@ func TestMaskingRecordsAPI(t *testing.T) {
 	if code := get("/api/masking/record?key=1", nil); code != http.StatusNotFound {
 		t.Fatalf("no such record: %d", code)
 	}
-	var v struct{ Value string }
-	if get("/api/masking/value?p="+url.QueryEscape(p), &v); v.Value != key {
-		t.Fatalf("value %q", v.Value)
-	}
-	if code := get("/api/masking/value?p="+url.QueryEscape("{{EMAIL_00000000}}"), nil); code != http.StatusNotFound {
-		t.Fatalf("a placeholder it never made: %d", code)
-	}
 
 	// the request as it went, and the values to read it as it came
 	body := `{"messages":[{"role":"user","content":"` + sent + `"}]}`
@@ -109,7 +108,7 @@ func TestMaskingRecordsAPI(t *testing.T) {
 		t.Fatalf("a record kept without its body: %d", code)
 	}
 	rw := httptest.NewRecorder()
-	srv.ServeHTTP(rw, httptest.NewRequest("POST", "/api/masking/values", strings.NewReader(`{"ps":["`+p+`","{{EMAIL_00000000}}"]}`)))
+	srv.ServeHTTP(rw, httptest.NewRequest("POST", "/api/masking/values", strings.NewReader(`{"recordKey":"`+strconv.FormatInt(rec.Key, 10)+`","ps":["`+p+`","{{EMAIL_00000000}}"]}`)))
 	var vs struct{ Values map[string]string }
 	if err := json.Unmarshal(rw.Body.Bytes(), &vs); err != nil || len(vs.Values) != 1 || vs.Values[p] != key || rw.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("values %d %s %v", rw.Code, rw.Body, rw.Header())
@@ -144,9 +143,7 @@ func TestMaskingRecordsAPI(t *testing.T) {
 			t.Fatalf("%s after clear: %d", path, code)
 		}
 	}
-	if get("/api/masking/value?p="+url.QueryEscape(p), &v); v.Value != key {
-		t.Fatalf("value after clear %q", v.Value)
-	}
+
 }
 
 // Try it under Settings › Privacy shows what a request would send: with
@@ -195,30 +192,34 @@ func TestMaskingAllowFromRecord(t *testing.T) {
 	if err := settings.Save(settings.Settings{Redact: true, RedactAllow: []string{"build-01"}}); err != nil {
 		t.Fatal(err)
 	}
-	defer gwmw.Mask(masking.Masker{})()
-	m, _ := gwmw.Served()
-	tl := m.(gwmw.Teller)
+	defer privacyengine.EnableBuiltin()()
+	tl := privacyengine.BuiltinForTest()
 	sent, hits := tl.TextHits("my key is " + key)
 	if len(hits) != 1 || strings.Contains(sent, key) {
 		t.Fatalf("masked %q %+v", sent, hits)
 	}
 	p := hits[0].Placeholder
+	rec := maskrec.Add(maskrec.Record{N: 1, Values: []maskrec.Value{{Placeholder: p, Kind: hits[0].Kind, By: hits[0].By}}})
+	keyRef := strconv.FormatInt(rec.Key, 10)
+	payload := func(action string) string {
+		return `{"recordKey":"` + keyRef + `","actionId":"` + action + `"}`
+	}
 	srv := webPageHandler(t, webHost{func() {}}, nil)
 	call := func(method, body string) *httptest.ResponseRecorder {
 		rw := httptest.NewRecorder()
-		srv.ServeHTTP(rw, httptest.NewRequest(method, "/api/masking/allow", strings.NewReader(body)))
+		srv.ServeHTTP(rw, httptest.NewRequest(method, "/api/masking/record-action", strings.NewReader(body)))
 		return rw
 	}
 	if rw := call("GET", ""); rw.Code == http.StatusOK {
 		t.Fatalf("GET allow: %d", rw.Code)
 	}
-	if rw := call("POST", `{"p":"{{EMAIL_00000000}}"}`); rw.Code != http.StatusNotFound {
+	if rw := call("POST", payload("never-mask:{{EMAIL_00000000}}")); rw.Code != http.StatusBadRequest {
 		t.Fatalf("a placeholder it never made: %d %s", rw.Code, rw.Body)
 	}
 	if got := settings.Load().RedactAllow; len(got) != 1 {
 		t.Fatalf("allow after the unknown one %q", got)
 	}
-	rw := call("POST", `{"p":"`+p+`"}`)
+	rw := call("POST", payload("never-mask:"+p))
 	var st struct {
 		RedactAllow []string `json:"redactAllow"`
 	}
@@ -230,12 +231,72 @@ func TestMaskingAllowFromRecord(t *testing.T) {
 		t.Fatalf("allow %q, saved %q", st.RedactAllow, settings.Load().RedactAllow)
 	}
 	// once: again, it is in the list already
-	call("POST", `{"p":"`+p+`"}`)
+	call("POST", payload("never-mask:"+p))
 	if got := settings.Load().RedactAllow; strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("allow twice %q", got)
 	}
 	// the next request sends it as written
 	if again, hits := tl.TextHits("my key is " + key); len(hits) != 0 || !strings.Contains(again, key) {
 		t.Fatalf("after allow: %q %+v", again, hits)
+	}
+}
+
+func TestMaskingRecordActionUsesOriginatingEngine(t *testing.T) {
+	h := t.TempDir()
+	t.Setenv("HOME", h)
+	t.Setenv("USERPROFILE", h)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
+	if err := settings.Save(settings.Settings{
+		PrivacyEngine: "external",
+		RedactActions: map[string]string{"API_KEY": "block", "EMAIL": "warn"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	builtin := maskrec.Add(maskrec.Record{Blocked: true, Values: []maskrec.Value{{Kind: "API_KEY", Action: "block"}}})
+	external := maskrec.Add(maskrec.Record{
+		Engine: "external", Blocked: true, Values: []maskrec.Value{{Kind: "API_KEY", Action: "block"}},
+		Actions: []gwmw.RecordAction{{ID: "engine-action", Label: "Change this rule", TargetRef: "private-reference"}},
+	})
+	srv := webPageHandler(t, webHost{func() {}}, nil)
+	call := func(method, path, body string) *httptest.ResponseRecorder {
+		t.Helper()
+		rw := httptest.NewRecorder()
+		srv.ServeHTTP(rw, httptest.NewRequest(method, path, strings.NewReader(body)))
+		return rw
+	}
+	const path = "/api/masking/record-action"
+	key := strconv.FormatInt(external.Key, 10)
+	detail := call("GET", "/api/masking/record?key="+key, "")
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), "engine-action") ||
+		strings.Contains(detail.Body.String(), "private-reference") {
+		t.Fatalf("the record must expose the button without its target: %d %s", detail.Code, detail.Body)
+	}
+	for endpoint, payload := range map[string]string{
+		"/api/settings/redact-actions": `{"actions":{}}`,
+		path:                           `{"recordKey":"` + key + `","actionId":"mask-blocked-kinds"}`,
+	} {
+		if rw := call("POST", endpoint, payload); rw.Code == http.StatusOK || settings.Load().RedactActions["API_KEY"] != "block" {
+			t.Fatalf("unexpected settings write through %s: %d %s", endpoint, rw.Code, rw.Body)
+		}
+	}
+	for _, payload := range []string{
+		`{"recordKey":"` + key + `","actionId":"engine-action"}`,
+		`{"recordKey":"` + key + `","actionId":"engine-action","targetRef":"override"}`,
+	} {
+		if rw := call("POST", path, payload); rw.Code == http.StatusOK || settings.Load().RedactActions["API_KEY"] != "block" {
+			t.Fatalf("an unavailable engine or client-supplied target must fail: %d %s", rw.Code, rw.Body)
+		}
+	}
+	key = strconv.FormatInt(builtin.Key, 10)
+	body := `{"recordKey":"` + key + `","actionId":"mask-blocked-kinds"}`
+	if rw := call("POST", path, body); rw.Code != http.StatusOK {
+		t.Fatalf("a record from the previous engine should still work: %d %s", rw.Code, rw.Body)
+	}
+	if s := settings.Load(); s.RedactActions["API_KEY"] != "" || s.RedactActions["EMAIL"] != "warn" || s.PrivacyEngine != "external" {
+		t.Fatalf("wrong settings after the record action: %v, engine %q", s.RedactActions, s.PrivacyEngine)
+	}
+	if rw := call("POST", path, body); rw.Code == http.StatusOK {
+		t.Fatal("the same historical block cannot change a category that no longer blocks")
 	}
 }

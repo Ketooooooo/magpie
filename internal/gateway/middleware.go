@@ -10,6 +10,7 @@ import (
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/plugin"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -24,7 +25,7 @@ import (
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	r, err := pinPrivacySettings(r)
 	if err != nil {
-		writeError(w, from, http.StatusServiceUnavailable, gwmw.ErrUnmasked.Error())
+		writeError(w, from, http.StatusServiceUnavailable, privacyengine.ErrUnprotected.Error())
 		return
 	}
 	withGatewaySession(w, r)

@@ -140,11 +140,12 @@ func SearcherUnused() string {
 // or more marked mix (SearchAPI.Mix, #2845) are asked first, together,
 // and what they found is merged (askSearchAPIsTogether); the others are
 // asked, in order, only when none of those found anything.
-func (s *Server) apiSearch(ctx context.Context, query string) (string, []Hit, error) {
-	query, err := maskedQuery(ctx, query, nil)
+func (s *Server) apiSearch(ctx context.Context, query string) (said string, hits []Hit, err error) {
+	query, session, err := maskedQuery(ctx, query, nil)
 	if err != nil {
 		return "", nil, err
 	}
+	defer finishSearchPrivacy(ctx, session, &said, &err)
 	var errs []error
 	apis := provider.SearchAPIs()
 	if mixed := slices.DeleteFunc(slices.Clone(apis), func(a provider.SearchAPI) bool { return !a.Mix }); len(mixed) > 1 {

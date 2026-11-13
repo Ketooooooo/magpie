@@ -72,7 +72,7 @@ func TestSum(t *testing.T) {
 	p, k := "{{PERSON_aaaabbbb}}", "{{API_KEY_ccccdddd}}"
 	Add(Record{Time: now.AddDate(0, 0, -2), Agent: "codex", Provider: "openai", N: 1, Values: []Value{{Placeholder: p, Kind: "PERSON", By: "model", Len: 2}}})
 	_ = Sum(7) // read, then kept up as Add writes
-	Add(Record{Time: now.Add(-time.Hour), Agent: "claude", Provider: "anthropic", N: 3, Values: []Value{{Placeholder: p, Kind: "PERSON", By: "known", Len: 2, N: 2}, {Placeholder: k, Kind: "API_KEY", By: "rule", Len: 40}}})
+	latestPerson := Add(Record{Time: now.Add(-time.Hour), Agent: "claude", Provider: "anthropic", N: 3, Values: []Value{{Placeholder: p, Kind: "PERSON", By: "known", Len: 2, N: 2}, {Placeholder: k, Kind: "API_KEY", By: "rule", Len: 40}}})
 	Add(Record{Time: now, Agent: "claude", Provider: "anthropic", N: 1, Values: []Value{{Placeholder: k, Kind: "API_KEY", By: "rule", Len: 40}}})
 	s := Sum(7)
 	if s.Requests != 3 || s.N != 5 || s.Distinct != 2 || len(s.Days) != 7 {
@@ -90,7 +90,7 @@ func TestSum(t *testing.T) {
 	if len(s.Agents) != 2 || s.Agents[0].Name != "claude" || s.Agents[0].Distinct != 2 || s.Providers[0].Name != "anthropic" {
 		t.Fatalf("agents %+v providers %+v", s.Agents, s.Providers)
 	}
-	if s.Values[0].Placeholder != p || s.Values[0].Requests != 2 || s.Values[0].By != "model" {
+	if s.Values[0].Placeholder != p || s.Values[0].Requests != 2 || s.Values[0].By != "model" || s.Values[0].RecordKey != latestPerson.Key {
 		t.Fatalf("values: %+v", s.Values)
 	}
 	if s.Hours[14] != 3 || s.Hours[15] != 2 {

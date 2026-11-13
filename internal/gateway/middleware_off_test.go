@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net/http"
 	"os"
@@ -12,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/middleware"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/provider"
@@ -58,7 +58,7 @@ func (e *echoing) last() string {
 // panicky is a masker that fails, on each way the gateway asks it to
 // mask (a Teller is asked through JSONHits and TextHits, a ContextTeller
 // through JSONHitsContext and TextHitsContext, which masking.Masker has).
-type panicky struct{ masking.Masker }
+type panicky struct{ builtinMasker }
 
 func (panicky) JSONHitsContext(context.Context, []byte) ([]byte, []gwmw.Hit) { panic("masker broke") }
 func (panicky) TextHitsContext(context.Context, string) (string, []gwmw.Hit) { panic("masker broke") }
@@ -102,16 +102,16 @@ func TestMaskingOnAndOff(t *testing.T) {
 	masked("on")
 	t.Run("off", func(t *testing.T) {
 		withoutMasker(t)
-		gwmw.ForgetRefreshForTest()
+		privacyengine.ResetBuiltinRefreshForTest()
 		refused("off")
 		// the settings ask for masking: the refresh turns it on
-		gwmw.ForgetRefreshForTest()
+		privacyengine.ResetBuiltinRefreshForTest()
 		var remove func()
-		stop := gwmw.Refresh(func() { remove = gwmw.Mask(masking.Masker{}) })
+		stop := privacyengine.RefreshBuiltin(func() { remove = privacyengine.EnableBuiltin() })
 		masked("off, turned on by the refresh")
 		remove()
 		stop()
-		gwmw.ForgetRefreshForTest()
+		privacyengine.ResetBuiltinRefreshForTest()
 		// nothing asked for: it goes as it is
 		if err := settings.Save(settings.Settings{}); err != nil {
 			t.Fatal(err)
@@ -124,7 +124,7 @@ func TestMaskingOnAndOff(t *testing.T) {
 		}
 	})
 	t.Run("panics", func(t *testing.T) {
-		remove := gwmw.Mask(panicky{})
+		remove := privacyengine.RegisterBuiltinForTest(panicky{builtinMasker: privacyengine.BuiltinForTest()})
 		defer remove()
 		refused("a masker that panics")
 	})
@@ -139,17 +139,17 @@ func TestMaskedQueryFailsClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	const secret = "sk-proj-abcdEFGH1234ijklMNOP5678qrst"
-	if q, err := maskedQuery(context.Background(), "find "+secret, nil); err != nil || strings.Contains(q, secret) {
+	if q, _, err := maskedQuery(context.Background(), "find "+secret, nil); err != nil || strings.Contains(q, secret) {
 		t.Fatalf("on: %q %v", q, err)
 	}
 	withoutMasker(t)
 	gwmw.ForgetRefreshForTest()
-	if q, err := maskedQuery(context.Background(), "find "+secret, nil); err == nil {
+	if q, _, err := maskedQuery(context.Background(), "find "+secret, nil); err == nil {
 		t.Fatalf("off: sent %q", q)
 	}
 	// one the user set to go unmasked keeps it, plugin or not
 	p := &provider.Provider{ID: "local", Unredacted: true, Chat: "http://127.0.0.1:1/v1"}
-	if q, err := maskedQuery(context.Background(), "find "+secret, p); err != nil || q != "find "+secret {
+	if q, _, err := maskedQuery(context.Background(), "find "+secret, p); err != nil || q != "find "+secret {
 		t.Fatalf("off, to a provider set unmasked: %q %v", q, err)
 	}
 }

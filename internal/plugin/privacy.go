@@ -56,13 +56,22 @@ func Privacy(target string) (spec *PrivacySpec, only bool) {
 	return s, pkg.Main == "" && len(pkg.Exports) == 0
 }
 
-// PreviewPrivacy asks the installed engine for a read-only preview.
-func PreviewPrivacy(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) error {
+// previewPrivacy asks the installed engine for a read-only preview.
+func previewPrivacy(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) error {
 	params, err := privacyParams(target, spec, directory, input)
 	if err != nil {
 		return err
 	}
-	return Call(ctx, "privacyPreview", params, output)
+	return callHost(ctx, "privacyPreview", params, output)
+}
+
+// applyPrivacyRecordAction sends an action selected in a masking record to its engine.
+func applyPrivacyRecordAction(ctx context.Context, target string, spec PrivacySpec, directory string, input any) error {
+	params, err := privacyParams(target, spec, directory, input)
+	if err != nil {
+		return err
+	}
+	return callHost(ctx, "privacyRecordAction", params, nil)
 }
 
 func privacyParams(target string, spec PrivacySpec, directory string, input any) (map[string]any, error) {
@@ -81,8 +90,8 @@ func privacyParams(target string, spec PrivacySpec, directory string, input any)
 	}, nil
 }
 
-// PrivacyStream carries a request and its reply bytes through one owned host call.
-type PrivacyStream struct {
+// privacyStream carries a request and its reply bytes through one owned host call.
+type privacyStream struct {
 	body    *body
 	decoder *json.Decoder
 	ctx     context.Context
@@ -90,7 +99,7 @@ type PrivacyStream struct {
 
 const privacyWindow = 128 << 10
 
-func BeginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) (*PrivacyStream, error) {
+func beginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, directory string, input, output any) (*privacyStream, error) {
 	if err := netproxy.Held(ctx); err != nil {
 		return nil, err
 	}
@@ -123,7 +132,7 @@ func BeginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, di
 		return nil, err
 	}
 	b := &body{h: h, id: id, c: c, ctx: startup, closed: make(chan struct{})}
-	s := &PrivacyStream{body: b, decoder: json.NewDecoder(b), ctx: ctx}
+	s := &privacyStream{body: b, decoder: json.NewDecoder(b), ctx: ctx}
 	if err := s.decoder.Decode(output); err != nil {
 		s.Close()
 		return nil, err
@@ -131,7 +140,7 @@ func BeginPrivacyStream(ctx context.Context, target string, spec PrivacySpec, di
 	return s, nil
 }
 
-func (s *PrivacyStream) Reply(input, output any) error {
+func (s *privacyStream) Reply(input, output any) error {
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	s.body.ctx = ctx
@@ -141,4 +150,4 @@ func (s *PrivacyStream) Reply(input, output any) error {
 	return s.decoder.Decode(output)
 }
 
-func (s *PrivacyStream) Close() { _ = s.body.Close() }
+func (s *privacyStream) Close() { _ = s.body.Close() }
