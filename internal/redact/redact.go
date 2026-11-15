@@ -39,9 +39,11 @@ import (
 
 // Options says what to mask.
 type Options struct {
-	Secrets  bool     // API keys, private keys, tokens, passwords
-	Personal bool     // emails, phone numbers, ID and bank card numbers
-	Words    []string // the user's own: names, codenames, hosts
+	// ExternalModel identifies an external detector's configuration for replay.
+	ExternalModel string
+	Secrets       bool     // API keys, private keys, tokens, passwords
+	Personal      bool     // emails, phone numbers, ID and bank card numbers
+	Words         []string // the user's own: names, codenames, hosts
 	// WordsAnyCase matches Words in any case: Nightjar masks NIGHTJAR and
 	// nightjar too. Off, a word is matched as written.
 	WordsAnyCase bool

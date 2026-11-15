@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 
 	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/pii"
@@ -64,8 +65,8 @@ func privacyModelRoutes(mux *http.ServeMux) {
 			fail(rw, err)
 			return
 		}
-		if in.Model != "" && in.Model != pii.PrivacyFilter && in.Model != pii.AstrLinkGuard {
-			fail(rw, fmt.Errorf("model is %s or %s, not %q", pii.PrivacyFilter, pii.AstrLinkGuard, in.Model))
+		if in.Model != "" && !slices.ContainsFunc(models(), func(m pii.Model) bool { return m.ID() == in.Model }) {
+			fail(rw, fmt.Errorf("unknown local masking model %q", in.Model))
 			return
 		}
 		st := settings.Load()

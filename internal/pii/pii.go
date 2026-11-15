@@ -142,6 +142,8 @@ var ErrNotInstalled = errors.New("the local masking model isn't downloaded; down
 // Status is what Settings → Privacy shows of the model.
 type Status struct {
 	Model     string `json:"model"`
+	Name      string `json:"name,omitempty"`
+	External  bool   `json:"external,omitempty"`
 	Supported bool   `json:"supported"`
 	Installed bool   `json:"installed"`
 	Size      int64  `json:"size"`
@@ -240,7 +242,9 @@ type Model interface {
 }
 
 // Models are the local models, Privacy Filter first.
-func Models() []Model { return []Model{pfModel{}, guardModel{}} }
+func Models() []Model {
+	return append([]Model{pfModel{}, guardModel{}}, externalModels()...)
+}
 
 // Floor is the lowest threshold a user can set (settings.RedactModelScore):
 // what either model sends is at least this sure. pf-serve's default
@@ -259,8 +263,19 @@ func Threshold(set map[string]float64, m Model) float64 {
 
 // Of is the model id names; AstrLink Guard's for an id there's none of.
 func Of(id string) Model {
-	if id == PrivacyFilter {
+	switch id {
+	case PrivacyFilter:
 		return pfModel{}
+	case AstrLinkGuard:
+		return guardModel{}
+	}
+	if IsExternal(id) {
+		for _, model := range externalModels() {
+			if model.ID() == id {
+				return model
+			}
+		}
+		return &externalModel{id: id}
 	}
 	return guardModel{}
 }
@@ -273,6 +288,9 @@ func Of(id string) Model {
 // before there was a choice isn't held back while AstrLink Guard
 // downloads (masking.picked starts that download).
 func Choose(name string, on bool) string {
+	if IsExternal(name) {
+		return name
+	}
 	switch name {
 	case PrivacyFilter, AstrLinkGuard:
 		return name

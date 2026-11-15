@@ -66,9 +66,10 @@ func optionsCtx(ctx context.Context) redact.Options {
 	if (st.Redact || st.RedactPersonal) && ModelWanted(st) {
 		// until the model is on disk the rules mask alone, and nothing is
 		// held back for a download (it is started here)
-		if m := picked(st); m.Installed() {
+		if m := picked(st); m.Installed() || pii.IsExternal(m.ID()) {
 			o.MinScore = pii.Threshold(st.RedactModelScore, m)
-			o.Model = model(ctx, m, o.MinScore, st.RedactModel)
+			o.Model = model(ctx, m, o.MinScore, st.RedactModel || pii.IsExternal(m.ID()))
+			o.ExternalModel = pii.ExternalIdentity(m)
 			o.NamesByModel = m.ID() == pii.AstrLinkGuard
 		} else {
 			fetch(m, st.RedactModel)
@@ -95,7 +96,7 @@ func ModelWanted(st settings.Settings) bool {
 // onDisk says a local model is downloaded; a var for tests.
 var onDisk = func() bool {
 	for _, m := range pii.Models() {
-		if m.Installed() {
+		if !pii.IsExternal(m.ID()) && m.Installed() {
 			return true
 		}
 	}

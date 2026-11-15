@@ -135,14 +135,18 @@ func TestPrivacyModelPick(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(h, ".config"))
 	t.Setenv("XDG_CACHE_HOME", filepath.Join(h, ".cache"))
 	var did []string
+	const external = "external/fixture"
 	fakes := map[string]*fakeModel{
 		pii.PrivacyFilter: {id: pii.PrivacyFilter, did: &did},
 		pii.AstrLinkGuard: {id: pii.AstrLinkGuard, did: &did},
+		external:          {id: external, did: &did},
 	}
 	wasOf, wasModels := modelOf, models
 	t.Cleanup(func() { modelOf, models = wasOf, wasModels })
 	modelOf = func(id string) pii.Model { return fakes[id] }
-	models = func() []pii.Model { return []pii.Model{fakes[pii.PrivacyFilter], fakes[pii.AstrLinkGuard]} }
+	models = func() []pii.Model {
+		return []pii.Model{fakes[pii.PrivacyFilter], fakes[pii.AstrLinkGuard], fakes[external]}
+	}
 	srv := webPageHandler(t, webHost{func() {}}, nil)
 	do := func(body string) privacyModelJSON {
 		t.Helper()
@@ -158,7 +162,7 @@ func TestPrivacyModelPick(t *testing.T) {
 		}
 		return st
 	}
-	if st := do(""); !st.On || st.Chosen || st.Model != pii.AstrLinkGuard || len(st.Models) != 2 || st.Models[0].Model != pii.PrivacyFilter {
+	if st := do(""); !st.On || st.Chosen || st.Model != pii.AstrLinkGuard || len(st.Models) != 3 || st.Models[2].Model != external || st.Models[0].Model != pii.PrivacyFilter {
 		t.Fatalf("a new user's state: %+v", st)
 	}
 	if st := do(`{"do":"off"}`); st.On || !settings.Load().RedactModelOff {
@@ -206,7 +210,13 @@ func TestPrivacyModelPick(t *testing.T) {
 		t.Fatalf("a model there's none of: %d", rec.Code)
 	}
 	did = nil
-	if st := do(`{"do":"remove"}`); st.On || strings.Join(did, ", ") != "remove privacy-filter, remove astrlink-guard" {
+	if st := do(`{"do":"remove"}`); st.On || strings.Join(did, ", ") != "remove privacy-filter, remove astrlink-guard, remove external/fixture" {
 		t.Fatalf("remove: %+v %v", st, did)
+	}
+	if st := do(`{"do":"pick","model":"external/fixture"}`); st.On || st.Model != external {
+		t.Fatalf("picked external model while off: %+v", st)
+	}
+	if st := do(`{"do":"on"}`); !st.On || st.Model != external || settings.Load().RedactModelName != external {
+		t.Fatalf("enabled external model: %+v", st)
 	}
 }

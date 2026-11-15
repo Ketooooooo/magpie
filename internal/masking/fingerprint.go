@@ -26,8 +26,9 @@ func Fingerprint(st settings.Settings) string {
 		return ""
 	}
 	type modelPart struct {
-		ID    string  `json:"id"`
-		Score float64 `json:"score"`
+		ID       string  `json:"id"`
+		Score    float64 `json:"score"`
+		External string  `json:"external,omitempty"`
 	}
 	f := struct {
 		Secrets  bool              `json:"secrets"`
@@ -49,8 +50,8 @@ func Fingerprint(st settings.Settings) string {
 	if (st.Redact || st.RedactPersonal) && ModelWanted(st) {
 		// the model optionsCtx asks, without picked's download: one not
 		// on disk masks nothing yet, so it isn't part of it
-		if m := pii.Of(pii.Choose(st.RedactModelName, true)); m.Installed() {
-			f.Model = &modelPart{ID: m.ID(), Score: pii.Threshold(st.RedactModelScore, m)}
+		if m := pii.Of(pii.Choose(st.RedactModelName, true)); m.Installed() || pii.IsExternal(m.ID()) {
+			f.Model = &modelPart{ID: m.ID(), Score: pii.Threshold(st.RedactModelScore, m), External: pii.ExternalIdentity(m)}
 		}
 	}
 	b, err := json.Marshal(f)
