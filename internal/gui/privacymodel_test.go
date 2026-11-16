@@ -5,78 +5,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/yetone/magpie/internal/pii"
-	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
-
-func TestPrivacyModelPluginVersions(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("HOME", dir)
-	t.Setenv("USERPROFILE", dir)
-	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "config"))
-	manifest := `{"name":"test-privacy-model","magpie":{"privacyModels":{"command":"detector"}}}`
-	if err := os.WriteFile(filepath.Join(dir, "package.json"), []byte(manifest), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	installed, err := plugin.Add(t.Context(), dir)
-	if err != nil {
-		t.Fatalf("install privacy plugin: %v", err)
-	}
-	t.Cleanup(func() { _ = plugin.Remove(context.Background(), installed.Spec) })
-	options := map[string]any{"models": []any{
-		map[string]any{"id": "v0-1", "name": "Test v0.1", "path": filepath.Join(dir, "v0.1")},
-		map[string]any{"id": "v0-2", "name": "Test v0.2", "path": filepath.Join(dir, "v0.2")},
-	}}
-	if err := plugin.SetOptions(installed.Spec, options); err != nil {
-		t.Fatal(err)
-	}
-	mux := http.NewServeMux()
-	privacyModelRoutes(mux)
-	request := func(method, body string) privacyModelJSON {
-		t.Helper()
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, httptest.NewRequest(method, "/api/privacy-model", strings.NewReader(body)))
-		var state privacyModelJSON
-		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &state) != nil {
-			t.Fatalf("%s %s: %d %s", method, body, rec.Code, rec.Body)
-		}
-		return state
-	}
-	request("POST", `{"do":"off"}`)
-	state := request("GET", "")
-	if len(state.Models) != 4 || state.Models[2].Name != "Test v0.1" || state.Models[3].Name != "Test v0.2" {
-		t.Fatalf("model menu: %+v", state.Models)
-	}
-	first, second := state.Models[2].Model, state.Models[3].Model
-	for _, id := range []string{first, second} {
-		state = request("POST", `{"do":"pick","model":"`+id+`"}`)
-		if state.Model != id || settings.Load().RedactModelName != id {
-			t.Fatalf("selected: %q, want %q", state.Model, id)
-		}
-	}
-	if first == second {
-		t.Fatal("model versions share an id")
-	}
-	if err := plugin.SetOff(installed.Spec, true); err != nil {
-		t.Fatal(err)
-	}
-	if state = request("GET", ""); len(state.Models) != 2 || state.Model != second || state.Supported {
-		t.Fatalf("disabled plugin: %+v", state)
-	}
-	if err := plugin.SetOff(installed.Spec, false); err != nil {
-		t.Fatal(err)
-	}
-	if state = request("GET", ""); len(state.Models) != 4 || state.Model != second || state.Name != "Test v0.2" {
-		t.Fatalf("re-enabled plugin: %+v", state)
-	}
-}
 
 // The local masking model is on only once it is on disk: turned on where
 // it can't be downloaded, nothing is saved; the Settings page's own save

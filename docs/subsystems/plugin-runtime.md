@@ -410,26 +410,6 @@ manifest ([`page.go`](../../internal/plugin/page.go)); no Bun host.
 Tests: `TestWindowActions`, `TestPluginPageActions`,
 `plugin-actions.test.cjs`.
 
-## Local privacy models from community plugins
-
-A package can declare `magpie.privacyModels` with `command` and `args` in
-`package.json`. Magpie runs the command in the package directory, with the
-selected model's absolute path appended to `args`. The executable can be
-on `PATH`, absolute, or a path such as `./bin/helper` inside the package. It implements
-the same ready line and binary pipe protocol as `pf-serve`. A package with
-only this declaration needs no JavaScript entry.
-
-The installed plugin's Options JSON holds `models`, an array of entries
-with a unique `id`, a display `name`, an absolute local `path` and optional
-`revision` and `minScore`. Use a distinct `id` for each version. Bump
-`revision` if weights change at the same path, so their findings have a
-new cache. Configured versions appear in Settings → Privacy. Turning on a
-version starts its helper. Disabling or removing the plugin withdraws all its
-versions and stops its helper. A selected version that goes missing is
-unavailable until it returns or the user picks a different model.
-See [`PrivacyModels`](../../internal/plugin/privacy.go) and
-[`registeredPluginModels`](../../internal/pii/pluginmodels.go).
-
 ## Source of truth and composing
 
 What a plugin runs with is composed field by field (`Compose`), each value
