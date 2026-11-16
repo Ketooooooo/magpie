@@ -1,10 +1,12 @@
 package pii
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -15,15 +17,18 @@ import (
 	"github.com/yetone/magpie/internal/redact"
 )
 
+var guardLoad func(string) (spanFinder, error)
+
 // guardSandbox gives AstrLink Guard a folder of the test's own, and
 // puts back what the test changed.
 func guardSandbox(t *testing.T) string {
 	t.Helper()
 	d := t.TempDir()
-	wasRoot, wasFiles, wasBase, wasLoad, wasIdle := guardRoot, guardFiles, guardBase, guardLoad, idleAfter
+	wasRoot, wasFiles, wasBase, wasStart, wasIdle := guardRoot, guardFiles, guardBase, guardStart, idleAfter
 	wasDir := dir
 	guardRoot = func() string { return filepath.Join(d, "astrlink-guard") }
 	dir = func() string { return filepath.Join(d, "privacy-filter") }
+	guardStart = fakeGuardWorker
 	t.Cleanup(func() {
 		guardModel{}.Cancel()
 		guardModel{}.Stop()
@@ -41,13 +46,39 @@ func guardSandbox(t *testing.T) string {
 		guardBackend.cache.ll.Init()
 		clear(guardBackend.cache.m)
 		guardBackend.cache.mu.Unlock()
-		gsrv.mu.Lock()
-		gsrv.failed, gsrv.loadMS = "", 0
-		gsrv.mu.Unlock()
-		guardRoot, guardFiles, guardBase, guardLoad, idleAfter = wasRoot, wasFiles, wasBase, wasLoad, wasIdle
+		guardRoot, guardFiles, guardBase, guardStart, idleAfter = wasRoot, wasFiles, wasBase, wasStart, wasIdle
+		guardLoad = nil
 		dir = wasDir
 	})
 	return d
+}
+
+// Run the real worker loop over pipes with a stand-in model.
+func fakeGuardWorker(stop <-chan struct{}) (*helper, error) {
+	in, stdin, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, out, err := os.Pipe()
+	if err != nil {
+		in.Close()
+		stdin.Close()
+		return nil, err
+	}
+	h := &helper{cmd: &exec.Cmd{Path: "astrlink-serve"}, in: stdin, outf: stdout,
+		out: bufio.NewReader(stdout), stderr: new(tail), exited: make(chan struct{})}
+	load, dir := guardLoad, guardDir()
+	go func() {
+		serveAstrLink(in, out, func() (spanFinder, error) { return load(dir) })
+		out.Close()
+		in.Close()
+		close(h.exited)
+	}()
+	if err := h.readHello(loadTimeout, "", stop); err != nil {
+		return nil, err
+	}
+	h.enableParallelPipe()
+	return h, nil
 }
 
 // fakeGuardFiles puts files of the pinned sizes where the model goes.

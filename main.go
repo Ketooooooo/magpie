@@ -4,9 +4,12 @@ package main
 
 import (
 	_ "embed"
+	"fmt"
+	"os"
 
 	"github.com/yetone/magpie/internal/cli"
 	"github.com/yetone/magpie/internal/notices"
+	"github.com/yetone/magpie/internal/pii"
 	// the built-in plugins, registered with the runtime (internal/pluginrt)
 	_ "github.com/yetone/magpie/plugins/all"
 )
@@ -23,6 +26,13 @@ var version = "dev"
 var thirdParty string
 
 func main() {
+	if len(os.Args) == 3 && os.Args[1] == pii.AstrLinkServeCommand {
+		if err := pii.ServeAstrLink(os.Args[2], os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	notices.Text = thirdParty
 	cli.Main(version)
 }

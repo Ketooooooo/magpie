@@ -24,16 +24,17 @@ import (
 	"github.com/yetone/magpie/internal/redact"
 )
 
-// hello is the line pf-serve writes once the model is loaded.
+// hello is the line a helper writes once the model is loaded.
 type hello struct {
 	Device   string `json:"device"`
+	Via      string `json:"via,omitempty"`
 	GPU      bool   `json:"gpu"`
 	MS       int    `json:"ms"`
 	GPUError string `json:"gpuError"`
 	Error    string `json:"error"`
 }
 
-// helper is one pf-serve running.
+// helper is one model subprocess.
 type helper struct {
 	cmd *exec.Cmd
 	in  io.WriteCloser
@@ -48,7 +49,8 @@ type helper struct {
 	hello  hello
 	exited chan struct{}
 	// slow says magpie ended it, given too long to answer
-	slow atomic.Pointer[string]
+	slow     atomic.Pointer[string]
+	parallel *parallelPipe
 }
 
 // srv is the pf-serve magpie runs, one at a time. Its requests take
@@ -291,7 +293,6 @@ func startOne(path string, cpu bool, stop <-chan struct{}) (*helper, error) {
 }
 
 func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-chan struct{}) (*helper, error) {
-	path := cmd.Path
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -305,9 +306,10 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 	h := &helper{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 64<<10), outf: out, stderr: &tail{}, exited: make(chan struct{})}
 	cmd.Stderr = h.stderr
 	err = cmd.Start()
-	// pf-serve has its own copy: once it exits, a read here sees EOF
+	// The child has its own copy: once it exits, a read here sees EOF.
 	w.Close()
 	if err != nil {
+		in.Close()
 		out.Close()
 		return nil, err
 	}
@@ -315,6 +317,14 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 		cmd.Wait()
 		close(h.exited)
 	}()
+	if err := h.readHello(wait, deviceSuffix, stop); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+func (h *helper) readHello(wait time.Duration, deviceSuffix string, stop <-chan struct{}) error {
+	path := h.cmd.Path
 	line := make(chan string, 1)
 	go func() {
 		s, _ := h.out.ReadSlice('\n')
@@ -325,20 +335,20 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 	case s = <-line:
 	case <-giveUp(wait):
 		h.kill()
-		return nil, fmt.Errorf("%s: the model didn't load in %s%s", baseName(path), wait, deviceSuffix)
+		return fmt.Errorf("%s: the model didn't load in %s%s", baseName(path), wait, deviceSuffix)
 	case <-stop:
 		h.kill()
-		return nil, errStopped
+		return errStopped
 	}
-	if err := json.Unmarshal([]byte(s), &h.hello); err != nil || h.hello.Error != "" || h.hello.Device == "" {
+	if err := json.Unmarshal([]byte(s), &h.hello); err != nil || h.hello.Error != "" || h.hello.Device == "" && h.hello.Via == "" {
 		h.kill()
 		why := h.hello.Error
 		if why == "" {
 			why = h.died()
 		}
-		return nil, fmt.Errorf("%s: %s", baseName(path), why)
+		return fmt.Errorf("%s: %s", baseName(path), why)
 	}
-	return h, nil
+	return nil
 }
 
 func baseName(path string) string {
@@ -648,6 +658,14 @@ func idleLocked(h *helper) {
 // reply is a status, then each text's spans (pf-serve.cpp says how).
 func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 	var b bytes.Buffer
+	var pending *pipeCall
+	if p := h.parallel; p != nil {
+		id := p.next.Add(1)
+		pending = &pipeCall{texts: texts, reply: make(chan pipeReply, 1)}
+		p.calls.Store(id, pending)
+		defer p.calls.Delete(id)
+		binary.Write(&b, binary.LittleEndian, id)
+	}
 	size := 0
 	put := func(v uint32) { binary.Write(&b, binary.LittleEndian, v) }
 	put(uint32(len(texts)))
@@ -671,7 +689,28 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 	if _, err := h.in.Write(b.Bytes()); err != nil {
 		return nil, fmt.Errorf("%s %s (%v)", baseName(h.cmd.Path), h.died(), err)
 	}
+	if pending != nil {
+		select {
+		case reply := <-pending.reply:
+			return reply.found, reply.err
+		case <-h.parallel.done:
+			select {
+			case reply := <-pending.reply:
+				return reply.found, reply.err
+			default:
+				return nil, h.parallel.err
+			}
+		}
+	}
 	beforeRead(h)
+	return h.readFindings(texts)
+}
+
+type requestError string
+
+func (e requestError) Error() string { return string(e) }
+
+func (h *helper) readFindings(texts []string) ([][]redact.Found, error) {
 	r := &reader{r: h.out}
 	status := r.u32()
 	if status == 1 {
@@ -679,7 +718,7 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 		if r.err != nil {
 			return nil, r.fail(h)
 		}
-		return nil, errors.New(string(msg))
+		return nil, requestError(msg)
 	}
 	out := make([][]redact.Found, len(texts))
 	for i, t := range texts {
@@ -744,7 +783,7 @@ func (r *reader) bytes(n int) []byte {
 
 func (r *reader) fail(h *helper) error {
 	if errors.Is(r.err, io.EOF) || errors.Is(r.err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("pf-serve %s", h.died())
+		return fmt.Errorf("%s %s", baseName(h.cmd.Path), h.died())
 	}
 	return r.err
 }
