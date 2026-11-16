@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
-	"slices"
 	"strings"
 	"sync"
 
-	"github.com/yetone/magpie/internal/appdir"
 	"github.com/yetone/magpie/internal/plugin"
 )
 
@@ -26,7 +24,7 @@ func init() {
 	plugin.OnChange(func() { registeredPluginModels() })
 }
 
-// registeredPluginModels keeps a helper and its cache while its effective
+// registeredPluginModels keeps a helper and its cache while its launch
 // configuration stays the same. Install, options, updates and disable are
 // picked up across Magpie processes through the plugin store's stamp.
 func registeredPluginModels() []*externalModel {
@@ -86,19 +84,19 @@ func modelsFromPlugin(entry plugin.Entry, previous map[string]*externalModel) []
 	var list []*externalModel
 	for _, v := range versions {
 		id := fmt.Sprintf("%s%x/%s", pluginModelPrefix, owner[:8], v.ID)
-		spec := externalSpec{
-			ID: id, Name: v.Name, Command: command, Args: append(slices.Clone(launcher.Args), v.Path),
-			Revision: v.Revision, MinScore: v.MinScore,
+		launch := externalLaunch{
+			Command: command, Args: launcher.Args, Dir: dir, Weights: v.Path,
+			WeightsRevision: v.Revision, PackageRevision: packageRevision,
 		}
-		data, _ := json.Marshal(spec)
-		identity := fmt.Sprintf("%x", sha256.Sum256([]byte(dir+"\x00"+packageRevision+"\x00"+string(data))))
-		if old := previous[id]; old != nil && old.identity == identity {
-			list = append(list, old)
+		data, _ := json.Marshal(launch)
+		identity := fmt.Sprintf("%x", sha256.Sum256(append([]byte(id+"\x00"), data...)))
+		m := previous[id]
+		if m != nil && m.identity == identity {
 			delete(previous, id)
-			continue
+		} else {
+			m = newExternalModel(id, identity, launch)
 		}
-		m := &externalModel{id: id, spec: spec, dir: dir, weights: v.Path, identity: identity}
-		m.initBackend(appdir.Cache())
+		m.setMetadata(v.Name, v.MinScore)
 		list = append(list, m)
 	}
 	return list

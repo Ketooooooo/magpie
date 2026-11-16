@@ -38,7 +38,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
@@ -244,7 +243,7 @@ type Model interface {
 
 // Models are the local models, Privacy Filter first.
 func Models() []Model {
-	models := append([]Model{pfModel{}, guardModel{}}, externalModels()...)
+	models := []Model{pfModel{}, guardModel{}}
 	for _, m := range registeredPluginModels() {
 		models = append(models, m)
 	}
@@ -274,16 +273,8 @@ func Of(id string) Model {
 	case AstrLinkGuard:
 		return guardModel{}
 	}
-	if strings.HasPrefix(id, pluginModelPrefix) {
-		for _, model := range registeredPluginModels() {
-			if model.ID() == id {
-				return model
-			}
-		}
-		return &externalModel{id: id}
-	}
 	if IsExternal(id) {
-		for _, model := range externalModels() {
+		for _, model := range registeredPluginModels() {
 			if model.ID() == id {
 				return model
 			}

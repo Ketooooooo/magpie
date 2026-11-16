@@ -1,17 +1,13 @@
 package pii
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -19,88 +15,35 @@ import (
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
-	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/redact"
 )
 
 const externalPrefix = "external/"
 
-type externalSpec struct {
-	ID       string   `json:"id"`
-	Name     string   `json:"name"`
-	Command  string   `json:"command"`
-	Args     []string `json:"args,omitempty"`
-	Revision string   `json:"revision,omitempty"`
-	MinScore float64  `json:"minScore,omitempty"`
+// externalLaunch holds what can change the results of the helper.
+type externalLaunch struct {
+	Command         string
+	Args            []string
+	Dir             string
+	Weights         string
+	WeightsRevision string
+	PackageRevision string
 }
 
-var externalID = lazyre.New(`^[a-z0-9][a-z0-9_-]{0,63}$`)
-
-// The config is local to this process and never travels with synced settings.
-var externalModels = sync.OnceValue(func() []Model {
-	models, err := loadExternalModels(filepath.Join(appdir.Config(), "privacy-models.json"), appdir.Cache())
-	if err != nil {
-		log.Printf("privacy models: %v", err)
-	}
-	return models
-})
-
-func loadExternalModels(path, cacheDir string) ([]Model, error) {
-	const limit = 64 << 10
-	file, err := os.Open(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > limit {
-		return nil, fmt.Errorf("%s: file exceeds %d bytes", path, limit)
-	}
-	var cfg struct {
-		Models []externalSpec `json:"externalPrivacyModels"`
-	}
-	d := json.NewDecoder(bytes.NewReader(data))
-	d.DisallowUnknownFields()
-	if err := d.Decode(&cfg); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	if d.Decode(new(any)) != io.EOF {
-		return nil, fmt.Errorf("%s: expected one JSON object", path)
-	}
-	var out []Model
-	seen := map[string]bool{}
-	for i, spec := range cfg.Models {
-		if !externalID.MatchString(spec.ID) || seen[spec.ID] || strings.TrimSpace(spec.Name) == "" ||
-			!filepath.IsAbs(spec.Command) || spec.MinScore < 0 || spec.MinScore >= 1 {
-			return nil, fmt.Errorf("%s: invalid or duplicate external model at index %d", path, i)
-		}
-		seen[spec.ID] = true
-		// The fields have already been decoded and validated, so marshaling cannot fail.
-		data, _ := json.Marshal(spec)
-		m := &externalModel{spec: spec, id: externalPrefix + spec.ID, identity: fmt.Sprintf("%x", sha256.Sum256(data))}
-		m.initBackend(cacheDir)
-		out = append(out, m)
-	}
-	return out, nil
-}
-
-func (m *externalModel) initBackend(cacheDir string) {
-	path := filepath.Join(cacheDir, "external-privacy", "found-"+m.identity+".bin")
+func newExternalModel(id, identity string, launch externalLaunch) *externalModel {
+	m := &externalModel{id: id, identity: identity, launch: launch, run: make(chan struct{})}
+	path := filepath.Join(appdir.Cache(), "external-privacy", "found-"+identity+".bin")
 	m.backend = &backend{
 		turn: make(chan struct{}, 1), waiting: new(atomic.Int32),
 		cache: newLRU(20000), disk: new(diskState), chunk: guardChunk,
 		path:     func() string { return path },
-		classify: m.classify, heldBack: func() error { return nil },
+		heldBack: func() error { return nil },
 	}
+	return m
 }
 
+// IsExternal includes a saved selection whose external model is now missing.
 func IsExternal(id string) bool { return strings.HasPrefix(id, externalPrefix) }
 
 func ExternalIdentity(m Model) string {
@@ -111,66 +54,74 @@ func ExternalIdentity(m Model) string {
 }
 
 type externalModel struct {
-	spec     externalSpec
 	id       string
 	identity string
+	launch   externalLaunch
 	backend  *backend
-	dir      string // plugin directory for its launcher's relative arguments
-	weights  string // local weights configured for a plugin model
 	retired  atomic.Bool
 
-	mu      sync.Mutex
-	helper  *helper
-	stop    chan struct{}
-	idle    *time.Timer
-	loading bool
-	failed  string
+	mu       sync.Mutex
+	name     string
+	minScore float64
+	helper   *helper
+	run      chan struct{} // closed by Stop, including for work still in the queue
+	idle     *time.Timer
+	loading  bool
+	failed   string
 }
 
-func (m *externalModel) ID() string        { return m.id }
-func (m *externalModel) Supported() bool   { return m.backend != nil }
-func (m *externalModel) Size() int64       { return 0 }
-func (m *externalModel) MinScore() float64 { return m.spec.MinScore }
-func (m *externalModel) Cancel()           {}
+func (m *externalModel) ID() string      { return m.id }
+func (m *externalModel) Supported() bool { return m.backend != nil }
+func (m *externalModel) Size() int64     { return 0 }
+func (m *externalModel) Cancel()         {}
+
+func (m *externalModel) setMetadata(name string, minScore float64) {
+	m.mu.Lock()
+	m.name, m.minScore = name, minScore
+	m.mu.Unlock()
+}
+
+func (m *externalModel) MinScore() float64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.minScore
+}
 
 func (m *externalModel) Installed() bool {
 	if !m.Supported() || m.retired.Load() {
 		return false
 	}
-	if m.weights != "" {
-		if _, err := os.Stat(m.weights); err != nil {
-			return false
-		}
+	if _, err := os.Stat(m.launch.Weights); err != nil {
+		return false
 	}
-	_, err := exec.LookPath(m.spec.Command)
+	_, err := exec.LookPath(m.launch.Command)
 	return err == nil
 }
 
 func (m *externalModel) unavailable() error {
-	if strings.HasPrefix(m.id, pluginModelPrefix) {
-		return fmt.Errorf("privacy model %q is unavailable, check that its plugin is enabled and its local weights and launcher are installed", m.id)
-	}
-	return fmt.Errorf("external masking model %q is unavailable, check privacy-models.json and its local command", m.id)
+	return fmt.Errorf("privacy model %q is unavailable, select a model from an enabled plugin with local weights and a launcher", m.id)
 }
 
 func (m *externalModel) Download(func()) error { return m.unavailable() }
 
 func (m *externalModel) Find(ctx context.Context, texts []string) ([][]redact.Found, error) {
+	run := m.currentRun()
 	if !m.Installed() {
 		return nil, m.unavailable()
 	}
-	return m.backend.find(ctx, texts)
+	return m.backend.findWith(ctx, texts, m.classifier(run))
 }
 
 func (m *externalModel) Now() Status {
-	s := Status{Model: m.id, Name: m.spec.Name, External: true, Supported: m.Supported(), Installed: m.Installed()}
+	installed := m.Installed()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := Status{Model: m.id, Name: m.name, External: true, Supported: m.Supported(), Installed: installed}
 	if !s.Installed {
 		s.Failed = m.unavailable().Error()
 		return s
 	}
 	s.Waiting = int(m.backend.waiting.Load())
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	s.Failed, s.Loading = m.failed, m.loading
 	if h := m.helper; h != nil {
 		select {
@@ -183,20 +134,31 @@ func (m *externalModel) Now() Status {
 }
 
 func (m *externalModel) Warm() {
+	run := m.currentRun()
 	if m.Installed() {
 		go func() {
-			m.backend.turn <- struct{}{}
+			select {
+			case <-run:
+				return
+			case m.backend.turn <- struct{}{}:
+			}
 			defer func() { <-m.backend.turn }()
-			classifySafely(m.classify, []string{"warm"})
+			classifySafely(m.classifier(run), []string{"warm"})
 		}()
 	}
 }
 
+func (m *externalModel) currentRun() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.run
+}
+
 func (m *externalModel) Stop() {
 	m.mu.Lock()
-	if m.stop != nil {
-		close(m.stop)
-		m.stop = nil
+	if m.run != nil {
+		close(m.run)
+		m.run = make(chan struct{})
 	}
 	h := m.detach()
 	m.loading, m.failed = false, ""
@@ -239,9 +201,9 @@ func (m *externalModel) idleStop(h *helper) {
 	end(h)
 }
 
-func (m *externalModel) start() (*helper, error) {
+func (m *externalModel) start(run <-chan struct{}) (*helper, error) {
 	m.mu.Lock()
-	if m.retired.Load() {
+	if m.retired.Load() || run != m.run {
 		m.mu.Unlock()
 		return nil, errStopped
 	}
@@ -249,15 +211,15 @@ func (m *externalModel) start() (*helper, error) {
 		m.mu.Unlock()
 		return h, nil
 	}
-	stop := make(chan struct{})
-	m.stop, m.loading = stop, true
+	m.loading = true
 	m.mu.Unlock()
 
-	cmd := proc.Command(m.spec.Command, m.spec.Args...)
-	cmd.Dir = m.dir
-	h, err := startHelper(cmd, loadTimeout, "", stop)
+	args := append(slices.Clone(m.launch.Args), m.launch.Weights)
+	cmd := proc.Command(m.launch.Command, args...)
+	cmd.Dir = m.launch.Dir
+	h, err := startHelper(cmd, loadTimeout, "", run)
 	m.mu.Lock()
-	if m.stop != stop {
+	if m.run != run {
 		m.mu.Unlock()
 		if h != nil {
 			h.kill()
@@ -274,8 +236,14 @@ func (m *externalModel) start() (*helper, error) {
 	return h, err
 }
 
-func (m *externalModel) classify(texts []string) ([][]redact.Found, error) {
-	h, err := m.start()
+func (m *externalModel) classifier(run <-chan struct{}) func([]string) ([][]redact.Found, error) {
+	return func(texts []string) ([][]redact.Found, error) {
+		return m.classify(run, texts)
+	}
+}
+
+func (m *externalModel) classify(run <-chan struct{}, texts []string) ([][]redact.Found, error) {
+	h, err := m.start(run)
 	if err != nil {
 		return nil, err
 	}
