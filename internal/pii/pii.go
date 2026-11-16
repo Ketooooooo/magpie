@@ -2,7 +2,7 @@
 // masking rules can't (internal/redact's Model): a name or an address in
 // free text, a password with nothing around it to say so.
 //
-// It runs one of two models, the user's pick (Choose, Models):
+// Its built-in models are:
 // AstrLink Guard (astrlink.go), a 39 MB int8 token classifier for Chinese
 // and English, run in this process by internal/pii/guard, the default for
 // a user who never had the other; or Privacy Filter, below, which masks
@@ -38,6 +38,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/yetone/magpie/internal/appdir"
@@ -243,7 +244,11 @@ type Model interface {
 
 // Models are the local models, Privacy Filter first.
 func Models() []Model {
-	return append([]Model{pfModel{}, guardModel{}}, externalModels()...)
+	models := append([]Model{pfModel{}, guardModel{}}, externalModels()...)
+	for _, m := range registeredPluginModels() {
+		models = append(models, m)
+	}
+	return models
 }
 
 // Floor is the lowest threshold a user can set (settings.RedactModelScore):
@@ -268,6 +273,14 @@ func Of(id string) Model {
 		return pfModel{}
 	case AstrLinkGuard:
 		return guardModel{}
+	}
+	if strings.HasPrefix(id, pluginModelPrefix) {
+		for _, model := range registeredPluginModels() {
+			if model.ID() == id {
+				return model
+			}
+		}
+		return &externalModel{id: id}
 	}
 	if IsExternal(id) {
 		for _, model := range externalModels() {

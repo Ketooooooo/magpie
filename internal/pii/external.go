@@ -82,22 +82,23 @@ func loadExternalModels(path, cacheDir string) ([]Model, error) {
 			return nil, fmt.Errorf("%s: invalid or duplicate external model at index %d", path, i)
 		}
 		seen[spec.ID] = true
-		data, err := json.Marshal(spec)
-		if err != nil {
-			return nil, err
-		}
-		id := fmt.Sprintf("%x", sha256.Sum256(data))
-		m := &externalModel{spec: spec, id: externalPrefix + spec.ID, identity: id}
-		dir := filepath.Join(cacheDir, "external-privacy")
-		m.backend = &backend{
-			turn: make(chan struct{}, 1), waiting: new(atomic.Int32),
-			cache: newLRU(20000), disk: new(diskState), chunk: guardChunk,
-			path:     func() string { return filepath.Join(dir, "found-"+id+".bin") },
-			classify: m.classify, heldBack: func() error { return nil },
-		}
+		// The fields have already been decoded and validated, so marshaling cannot fail.
+		data, _ := json.Marshal(spec)
+		m := &externalModel{spec: spec, id: externalPrefix + spec.ID, identity: fmt.Sprintf("%x", sha256.Sum256(data))}
+		m.initBackend(cacheDir)
 		out = append(out, m)
 	}
 	return out, nil
+}
+
+func (m *externalModel) initBackend(cacheDir string) {
+	path := filepath.Join(cacheDir, "external-privacy", "found-"+m.identity+".bin")
+	m.backend = &backend{
+		turn: make(chan struct{}, 1), waiting: new(atomic.Int32),
+		cache: newLRU(20000), disk: new(diskState), chunk: guardChunk,
+		path:     func() string { return path },
+		classify: m.classify, heldBack: func() error { return nil },
+	}
 }
 
 func IsExternal(id string) bool { return strings.HasPrefix(id, externalPrefix) }
@@ -114,6 +115,9 @@ type externalModel struct {
 	id       string
 	identity string
 	backend  *backend
+	dir      string // plugin directory for its launcher's relative arguments
+	weights  string // local weights configured for a plugin model
+	retired  atomic.Bool
 
 	mu      sync.Mutex
 	helper  *helper
@@ -130,11 +134,22 @@ func (m *externalModel) MinScore() float64 { return m.spec.MinScore }
 func (m *externalModel) Cancel()           {}
 
 func (m *externalModel) Installed() bool {
+	if !m.Supported() || m.retired.Load() {
+		return false
+	}
+	if m.weights != "" {
+		if _, err := os.Stat(m.weights); err != nil {
+			return false
+		}
+	}
 	_, err := exec.LookPath(m.spec.Command)
-	return m.Supported() && err == nil
+	return err == nil
 }
 
 func (m *externalModel) unavailable() error {
+	if strings.HasPrefix(m.id, pluginModelPrefix) {
+		return fmt.Errorf("privacy model %q is unavailable, check that its plugin is enabled and its local weights and launcher are installed", m.id)
+	}
 	return fmt.Errorf("external masking model %q is unavailable, check privacy-models.json and its local command", m.id)
 }
 
@@ -226,6 +241,10 @@ func (m *externalModel) idleStop(h *helper) {
 
 func (m *externalModel) start() (*helper, error) {
 	m.mu.Lock()
+	if m.retired.Load() {
+		m.mu.Unlock()
+		return nil, errStopped
+	}
 	if h := m.helper; h != nil {
 		m.mu.Unlock()
 		return h, nil
@@ -234,7 +253,9 @@ func (m *externalModel) start() (*helper, error) {
 	m.stop, m.loading = stop, true
 	m.mu.Unlock()
 
-	h, err := startHelper(proc.Command(m.spec.Command, m.spec.Args...), loadTimeout, "", stop)
+	cmd := proc.Command(m.spec.Command, m.spec.Args...)
+	cmd.Dir = m.dir
+	h, err := startHelper(cmd, loadTimeout, "", stop)
 	m.mu.Lock()
 	if m.stop != stop {
 		m.mu.Unlock()

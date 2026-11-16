@@ -95,12 +95,7 @@ func ModelWanted(st settings.Settings) bool {
 
 // onDisk says a local model is downloaded; a var for tests.
 var onDisk = func() bool {
-	for _, m := range pii.Models() {
-		if !pii.IsExternal(m.ID()) && m.Installed() {
-			return true
-		}
-	}
-	return false
+	return pii.Of(pii.PrivacyFilter).Installed() || pii.Of(pii.AstrLinkGuard).Installed()
 }
 
 // fetched is when fetch last started each model's download, by id, so a

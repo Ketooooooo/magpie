@@ -521,6 +521,9 @@ func notPlugin(target string) error {
 	if w, _ := Window(target); w != nil {
 		return nil
 	}
+	if p, _ := PrivacyModels(target); p != nil {
+		return nil
+	}
 	var pkg struct {
 		Name    string          `json:"name"`
 		Main    string          `json:"main"`
@@ -688,6 +691,11 @@ func SetOptions(name string, opts map[string]any) error {
 	}
 	if i < 0 {
 		return fmt.Errorf("no plugin %q", name)
+	}
+	if p, _ := PrivacyModels(Target(l.Plugins[i].Spec)); p != nil {
+		if _, err := PrivacyVersions(opts); err != nil {
+			return err
+		}
 	}
 	if len(opts) == 0 {
 		opts = nil

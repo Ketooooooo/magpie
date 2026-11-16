@@ -142,6 +142,9 @@ func privacyModelRoutes(mux *http.ServeMux) {
 func turnOn(id, was string) error {
 	m := modelOf(id)
 	if !m.Supported() {
+		if pii.IsExternal(id) {
+			return m.Download(nil)
+		}
 		return fmt.Errorf("the local masking model doesn't run on this system yet")
 	}
 	for _, o := range models() {
