@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,6 +27,7 @@ import (
 
 // hello is the line a helper writes once the model is loaded.
 type hello struct {
+	Protocol int    `json:"protocol,omitempty"`
 	Device   string `json:"device"`
 	Via      string `json:"via,omitempty"`
 	GPU      bool   `json:"gpu"`
@@ -49,8 +51,8 @@ type helper struct {
 	hello  hello
 	exited chan struct{}
 	// slow says magpie ended it, given too long to answer
-	slow     atomic.Pointer[string]
-	parallel *parallelPipe
+	slow    atomic.Pointer[string]
+	replies *replyPipe
 }
 
 // srv is the pf-serve magpie runs, one at a time. Its requests take
@@ -305,6 +307,7 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 	cmd.Stdout = w
 	h := &helper{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 64<<10), outf: out, stderr: &tail{}, exited: make(chan struct{})}
 	cmd.Stderr = h.stderr
+	cmd.Env = append(cmd.Environ(), "MAGPIE_PII_PROTOCOL="+strconv.Itoa(helperProtocol))
 	err = cmd.Start()
 	// The child has its own copy: once it exits, a read here sees EOF.
 	w.Close()
@@ -347,6 +350,14 @@ func (h *helper) readHello(wait time.Duration, deviceSuffix string, stop <-chan 
 			why = h.died()
 		}
 		return fmt.Errorf("%s: %s", baseName(path), why)
+	}
+	switch h.hello.Protocol {
+	case 0: // Existing helpers have no protocol field.
+	case helperProtocol:
+		h.startReplyPipe()
+	default:
+		h.kill()
+		return fmt.Errorf("%s: unsupported model helper protocol %d", baseName(path), h.hello.Protocol)
 	}
 	return nil
 }
@@ -555,7 +566,7 @@ func classifyTurn(texts []string) ([][]redact.Found, error) {
 			// One that fails there moves back to the CPU (start, or
 			// below), with longer until the next try.
 			cpu = false
-			if h != nil && !h.hello.GPU {
+			if h != nil && !h.device().GPU {
 				gone, h = detachLocked(), nil
 			}
 		}
@@ -588,7 +599,7 @@ func classifyTurn(texts []string) ([][]redact.Found, error) {
 			if srv.h == h {
 				idleLocked(h)
 			}
-			if h.hello.GPU {
+			if h.device().GPU {
 				// the GPU answers: it is the model's again
 				srv.cpu, srv.gpuLost, srv.gpuFails = false, "", 0
 			}
@@ -605,7 +616,7 @@ func classifyTurn(texts []string) ([][]redact.Found, error) {
 			return nil, errStopped
 		}
 		hung := h.slow.Load() != nil
-		if h.hello.GPU && try > 0 {
+		if h.device().GPU && try > 0 {
 			lostGPULocked(err.Error())
 		}
 		// else the try again is on the GPU: a GPU the driver reset
@@ -613,7 +624,7 @@ func classifyTurn(texts []string) ([][]redact.Found, error) {
 		// past, is no lost GPU yet
 		srv.mu.Unlock()
 		h.kill()
-		if try == 1 && (!h.hello.GPU || hung) {
+		if try == 1 && (!h.device().GPU || hung) {
 			// a third try only after the GPU died twice, on the CPU
 			break
 		}
@@ -659,7 +670,7 @@ func idleLocked(h *helper) {
 func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 	var b bytes.Buffer
 	var pending *pipeCall
-	if p := h.parallel; p != nil {
+	if p := h.replies; p != nil {
 		id := p.next.Add(1)
 		pending = &pipeCall{texts: texts, reply: make(chan pipeReply, 1)}
 		p.calls.Store(id, pending)
@@ -681,7 +692,7 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 		case <-done:
 		case <-time.After(timeout):
 			// a hung pf-serve: killed, its pipe ends the read below
-			s := fmt.Sprintf("didn't answer in %s (%d KB%s), so magpie ended it", timeout, (size+1023)/1024, onWhat(!h.hello.GPU))
+			s := fmt.Sprintf("didn't answer in %s (%d KB%s), so magpie ended it", timeout, (size+1023)/1024, onWhat(!h.device().GPU))
 			h.slow.Store(&s)
 			h.cmd.Process.Kill()
 		}
@@ -693,12 +704,12 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 		select {
 		case reply := <-pending.reply:
 			return reply.found, reply.err
-		case <-h.parallel.done:
+		case <-h.replies.done:
 			select {
 			case reply := <-pending.reply:
 				return reply.found, reply.err
 			default:
-				return nil, h.parallel.err
+				return nil, h.replies.err
 			}
 		}
 	}

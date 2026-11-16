@@ -4,7 +4,7 @@
 //
 // Its built-in models are:
 // AstrLink Guard (astrlink.go), a 39 MB int8 token classifier for Chinese
-// and English, run in this process by internal/pii/guard, the default for
+// and English, run in a Magpie subprocess using internal/pii/guard, the default for
 // a user who never had the other; or Privacy Filter, below, which masks
 // many more ordinary values in code (go.sum hashes, product names; #3578).
 //
@@ -186,7 +186,8 @@ func Now() Status {
 	dl.fill(&s)
 	srv.mu.Lock()
 	if srv.h != nil {
-		s.Running, s.Device, s.GPU, s.LoadMS, s.GPUError = true, srv.h.hello.Device, srv.h.hello.GPU, srv.h.hello.MS, srv.h.hello.GPUError
+		device := srv.h.device()
+		s.Running, s.Device, s.GPU, s.LoadMS, s.GPUError = true, device.Device, device.GPU, device.MS, device.GPUError
 	}
 	s.Failed, s.Loading = srv.failed, srv.loading
 	if s.GPUError == "" {

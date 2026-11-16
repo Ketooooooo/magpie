@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/yetone/magpie/internal/pii/guard"
@@ -27,73 +26,7 @@ func startAstrLink(stop <-chan struct{}) (*helper, error) {
 	if err != nil {
 		return nil, err
 	}
-	h, err := startHelper(proc.Command(exe, AstrLinkServeCommand, guardDir()), loadTimeout, "", stop)
-	if err == nil {
-		h.enableParallelPipe()
-	}
-	return h, err
-}
-
-type pipeCall struct {
-	texts []string
-	reply chan pipeReply
-}
-
-type pipeReply struct {
-	found [][]redact.Found
-	err   error
-}
-
-// AstrLink shares the helper handshake and span encoding. Request IDs let
-// it return a short request before a long one on the same pipe.
-type parallelPipe struct {
-	next   atomic.Uint32
-	calls  sync.Map // uint32 -> *pipeCall
-	device atomic.Pointer[hello]
-	done   chan struct{}
-	err    error // published by closing done
-}
-
-func (h *helper) enableParallelPipe() {
-	p := &parallelPipe{done: make(chan struct{})}
-	p.device.Store(&h.hello)
-	h.parallel = p
-	go func() {
-		p.err = h.readParallelReplies()
-		close(p.done)
-		h.kill()
-	}()
-}
-
-func (h *helper) readParallelReplies() error {
-	r := &reader{r: h.out}
-	for {
-		id := r.u32()
-		if r.err != nil {
-			return r.fail(h)
-		}
-		entry, ok := h.parallel.calls.Load(id)
-		if !ok {
-			return fmt.Errorf("unexpected AstrLink reply to request %d", id)
-		}
-		n := r.u32()
-		if n > 64<<10 {
-			return fmt.Errorf("invalid AstrLink device update length %d", n)
-		}
-		var status hello
-		if err := json.Unmarshal(r.bytes(int(n)), &status); r.err != nil {
-			return r.fail(h)
-		} else if err != nil {
-			return err
-		}
-		h.parallel.device.Store(&status)
-		call := entry.(*pipeCall)
-		found, err := h.readFindings(call.texts)
-		if _, ok := err.(requestError); err != nil && !ok {
-			return err
-		}
-		call.reply <- pipeReply{found, err}
-	}
+	return startHelper(proc.Command(exe, AstrLinkServeCommand, guardDir()), loadTimeout, "", stop)
 }
 
 type spanFinder interface {
@@ -119,7 +52,10 @@ func serveAstrLink(in io.Reader, out io.Writer, load func() (spanFinder, error))
 		return json.NewEncoder(out).Encode(hello{Error: fmt.Sprintf("the local masking model didn't load: %v", err)})
 	}
 	loadMS := int(time.Since(start).Milliseconds())
-	if err := json.NewEncoder(out).Encode(astrLinkDevice(model, loadMS)); err != nil {
+	lastDevice := astrLinkDevice(model, loadMS)
+	ready := lastDevice
+	ready.Protocol = helperProtocol
+	if err := json.NewEncoder(out).Encode(ready); err != nil {
 		return err
 	}
 	r := &reader{r: bufio.NewReader(in)}
@@ -163,7 +99,11 @@ func serveAstrLink(in io.Reader, out io.Writer, load func() (spanFinder, error))
 			defer write.Unlock()
 			var b bytes.Buffer
 			put := func(v uint32) { binary.Write(&b, binary.LittleEndian, v) }
-			status, _ := json.Marshal(astrLinkDevice(model, loadMS))
+			var status []byte
+			if device := astrLinkDevice(model, loadMS); device != lastDevice {
+				status, _ = json.Marshal(device)
+				lastDevice = device
+			}
 			put(id)
 			put(uint32(len(status)))
 			b.Write(status)

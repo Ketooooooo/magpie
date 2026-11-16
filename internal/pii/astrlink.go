@@ -360,7 +360,7 @@ func (guardModel) Now() Status {
 		select {
 		case <-h.exited:
 		default:
-			info := h.parallel.device.Load()
+			info := h.device()
 			s.Running, s.Via, s.Device, s.GPUError, s.LoadMS = true, info.Via, info.Device, info.GPUError, info.MS
 		}
 	}
