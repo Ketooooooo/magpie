@@ -101,7 +101,12 @@ func fakeServe(mode string) {
 	if mode == "loadhang" || mode == "gpuloadhang" && gpu {
 		time.Sleep(time.Hour)
 	}
-	json.NewEncoder(os.Stdout).Encode(map[string]any{"device": device, "gpu": gpu, "ms": 7})
+	ready := map[string]any{"device": device, "gpu": gpu, "ms": 7}
+	framed := mode == "protocol2" && os.Getenv("MAGPIE_PII_PROTOCOL") == "2"
+	if framed {
+		ready["protocol"] = 2
+	}
+	json.NewEncoder(os.Stdout).Encode(ready)
 	in := bufio.NewReader(os.Stdin)
 	out := bufio.NewWriter(os.Stdout)
 	u32 := func() (uint32, error) {
@@ -111,6 +116,15 @@ func fakeServe(mode string) {
 	}
 	put := func(v any) { binary.Write(out, binary.LittleEndian, v) }
 	for {
+		var id uint32
+		if framed {
+			var err error
+			id, err = u32()
+			if err != nil {
+				os.Exit(0)
+			}
+			logf("request-id %d", id)
+		}
 		n, err := u32()
 		if err != nil {
 			os.Exit(0) // stdin ended: magpie let it go
@@ -153,6 +167,10 @@ func fakeServe(mode string) {
 			os.Exit(3)
 		case mode == "slow":
 			time.Sleep(300 * time.Millisecond)
+		}
+		if framed {
+			put(id)
+			put(uint32(0)) // no device change
 		}
 		put(uint32(0))
 		for _, t := range texts {

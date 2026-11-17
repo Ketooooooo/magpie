@@ -4,7 +4,7 @@
 //
 // Its built-in models are:
 // AstrLink Guard (astrlink.go), a 39 MB int8 token classifier for Chinese
-// and English, run in this process by internal/pii/guard, the default for
+// and English, run in a Magpie subprocess using internal/pii/guard, the default for
 // a user who never had the other; or Privacy Filter, below, which masks
 // many more ordinary values in code (go.sum hashes, product names; #3578).
 //

@@ -1,10 +1,15 @@
 package pii
 
 import (
+	"bufio"
 	"context"
+	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -15,15 +20,18 @@ import (
 	"github.com/yetone/magpie/internal/redact"
 )
 
+var guardLoad func(string) (spanFinder, error)
+
 // guardSandbox gives AstrLink Guard a folder of the test's own, and
 // puts back what the test changed.
 func guardSandbox(t *testing.T) string {
 	t.Helper()
 	d := t.TempDir()
-	wasRoot, wasFiles, wasBase, wasLoad, wasIdle := guardRoot, guardFiles, guardBase, guardLoad, idleAfter
+	wasRoot, wasFiles, wasBase, wasStart, wasIdle := guardRoot, guardFiles, guardBase, guardStart, idleAfter
 	wasDir := dir
 	guardRoot = func() string { return filepath.Join(d, "astrlink-guard") }
 	dir = func() string { return filepath.Join(d, "privacy-filter") }
+	guardStart = fakeGuardWorker
 	t.Cleanup(func() {
 		guardModel{}.Cancel()
 		guardModel{}.Stop()
@@ -41,13 +49,38 @@ func guardSandbox(t *testing.T) string {
 		guardBackend.cache.ll.Init()
 		clear(guardBackend.cache.m)
 		guardBackend.cache.mu.Unlock()
-		gsrv.mu.Lock()
-		gsrv.failed, gsrv.loadMS = "", 0
-		gsrv.mu.Unlock()
-		guardRoot, guardFiles, guardBase, guardLoad, idleAfter = wasRoot, wasFiles, wasBase, wasLoad, wasIdle
+		guardRoot, guardFiles, guardBase, guardStart, idleAfter = wasRoot, wasFiles, wasBase, wasStart, wasIdle
+		guardLoad = nil
 		dir = wasDir
 	})
 	return d
+}
+
+// Run the real worker loop over pipes with a stand-in model.
+func fakeGuardWorker(stop <-chan struct{}) (*helper, error) {
+	in, stdin, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, out, err := os.Pipe()
+	if err != nil {
+		in.Close()
+		stdin.Close()
+		return nil, err
+	}
+	h := &helper{cmd: &exec.Cmd{Path: "astrlink-serve"}, in: stdin, outf: stdout,
+		out: bufio.NewReader(stdout), stderr: new(tail), exited: make(chan struct{})}
+	load, dir := guardLoad, guardDir()
+	go func() {
+		serveAstrLink(in, out, func() (spanFinder, error) { return load(dir) })
+		out.Close()
+		in.Close()
+		close(h.exited)
+	}()
+	if err := h.readHello(loadTimeout, "", stop); err != nil {
+		return nil, err
+	}
+	return h, nil
 }
 
 // fakeGuardFiles puts files of the pinned sizes where the model goes.
@@ -193,6 +226,74 @@ type backendFinder struct {
 }
 
 func (f backendFinder) Backend() (string, string, error) { return f.via, f.device, f.err }
+
+type changingGuardDevice struct {
+	cpu atomic.Bool
+}
+
+func (f *changingGuardDevice) Backend() (string, string, error) {
+	if f.cpu.Load() {
+		return "", "CPU", errors.New("prediction failed")
+	}
+	return "CoreML", "Neural Engine", nil
+}
+
+func (f *changingGuardDevice) Find(text string) []guard.Span {
+	if text == "fall back" {
+		f.cpu.Store(true)
+	}
+	return nil
+}
+
+func TestGuardReportsOnlyDeviceChanges(t *testing.T) {
+	in, send := io.Pipe()
+	receive, out := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		done <- serveAstrLink(in, out, func() (spanFinder, error) { return new(changingGuardDevice), nil })
+	}()
+	t.Cleanup(func() {
+		send.Close()
+		receive.Close()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	})
+	r := &reader{r: bufio.NewReader(receive)}
+	var ready hello
+	line, err := r.r.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(line, &ready); err != nil || ready.Protocol != 2 || ready.Device != "Neural Engine" {
+		t.Fatalf("ready = %+v, %v", ready, err)
+	}
+	for i, text := range []string{"first", "fall back", "last"} {
+		id := uint32(i + 21)
+		header := [3]uint32{id, 1, uint32(len(text))}
+		if err := binary.Write(send, binary.LittleEndian, header); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.WriteString(send, text); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.u32(); got != id {
+			t.Fatalf("reply ID = %d, want %d", got, id)
+		}
+		update := r.bytes(int(r.u32()))
+		if text == "fall back" {
+			var state hello
+			if err := json.Unmarshal(update, &state); err != nil || state.Device != "CPU" || state.GPUError != "prediction failed" {
+				t.Fatalf("fallback device = %s, %v", update, err)
+			}
+		} else if len(update) != 0 {
+			t.Fatalf("unexpected device update after %q: %s", text, update)
+		}
+		if status, count := r.u32(), r.u32(); r.err != nil || status != 0 || count != 0 {
+			t.Fatalf("reply payload = %d, %d, %v", status, count, r.err)
+		}
+	}
+}
 
 // Now names what reads AstrLink Guard: CoreML and the device its plan
 // picked while CoreML reads, the CPU with CoreML's error when that failed,

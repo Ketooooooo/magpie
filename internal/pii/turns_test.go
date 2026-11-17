@@ -92,8 +92,11 @@ func TestGuardIdleWaitsForEveryTurn(t *testing.T) {
 	if _, err := Of(AstrLinkGuard).Find(context.Background(), []string{"one"}); err != nil {
 		t.Fatal(err)
 	}
+	gsrv.mu.Lock()
+	h, seq := gsrv.h, gsrv.idleSeq
+	gsrv.mu.Unlock()
 	guardTurn <- struct{}{} // a request on it
-	guardIdle()
+	gsrv.expireIdle(h, seq)
 	running := Of(AstrLinkGuard).Now().Running
 	<-guardTurn
 	if !running {
@@ -102,7 +105,7 @@ func TestGuardIdleWaitsForEveryTurn(t *testing.T) {
 	if len(guardTurn) != 0 {
 		t.Fatalf("%d turns left held", len(guardTurn))
 	}
-	guardIdle()
+	gsrv.expireIdle(h, seq)
 	if Of(AstrLinkGuard).Now().Running {
 		t.Fatal("kept with no request")
 	}

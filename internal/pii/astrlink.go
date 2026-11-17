@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -16,8 +15,8 @@ import (
 
 // AstrLink Guard (QuantumNous/astrlink-guard, Apache-2.0) is the second
 // local model: a 37 MB int8 token classifier for Chinese and English,
-// run in magpie's own process by internal/pii/guard, on the CPU of every
-// system and through CoreML on a Mac, with nothing native to download. Its files are fetched from
+// run by a Magpie helper using internal/pii/guard, on the CPU of every
+// system and through CoreML on a Mac, with no separate executable to download. Its files are fetched from
 // Hugging Face at the revision their sha256 were pinned at (the
 // publisher's own listing), and are loaded on the first request that
 // needs them and let go after idleAfter with none.
@@ -116,39 +115,18 @@ func removeOldGuard() {
 	}
 }
 
-// gsrv is AstrLink Guard, loaded, and why it failed; mu is never held
-// while it loads or reads.
-var gsrv struct {
-	mu      sync.Mutex
-	m       spanFinder
-	gen     int // counts the unloads
-	loadMS  int
-	loading bool
-	idle    *time.Timer
-	failed  string
-	lastErr error
-	fails   int
-	retryAt time.Time
+var gsrv = helperRunner{
+	turn:              guardTurn,
+	backoffBeforeLoad: true,
+	retry: func(err error, n int) time.Duration {
+		if err == ErrNotInstalled {
+			return 0
+		}
+		return retryAfter(n)
+	},
 }
 
-// spanFinder is the model, loaded (*guard.Model).
-type spanFinder interface {
-	Find(text string) []guard.Span
-}
-
-// backender is a model that says what reads it (guard.Model.Backend).
-type backender interface {
-	Backend() (via, device string, err error)
-}
-
-// guardLoad reads the model; a var for tests.
-var guardLoad = func(dir string) (spanFinder, error) {
-	m, err := guard.Load(dir)
-	if err != nil {
-		return nil, err
-	}
-	return m, nil
-}
+var guardStart = startAstrLink
 
 // guardTurn is held by each request the model reads, guard.Cores() of
 // them at once. They share those cores (guard.Find takes them as it reads
@@ -160,136 +138,36 @@ var guardLoad = func(dir string) (spanFinder, error) {
 // request as for eight.
 var guardTurn = make(chan struct{}, guard.Cores())
 
-// guardLoading is held while the model loads, so requests read at once
-// load it once.
-var guardLoading sync.Mutex
-
 var guardBackend = &backend{
 	turn:     guardTurn,
 	waiting:  new(atomic.Int32),
 	cache:    newLRU(20000),
 	disk:     new(diskState),
 	path:     func() string { return filepath.Join(guardRoot(), "found-"+guardRev[:12]+".bin") },
-	classify: guardClassify,
-	heldBack: guardHeldBack,
+	heldBack: gsrv.heldBack,
 	chunk:    guardChunk,
 }
 
-// guardClassify is what the model finds in texts, loaded if it isn't.
-// The caller holds the backend's turn.
-func guardClassify(texts []string) ([][]redact.Found, error) {
-	out, err := guardClassifyTurn(texts)
-	gsrv.mu.Lock()
-	gsrv.failed = ""
-	switch {
-	case err == nil:
-		gsrv.lastErr, gsrv.fails, gsrv.retryAt = nil, 0, time.Time{}
-	case err == ErrNotInstalled:
-		// not a model that failed: tried again once it is downloaded
-		gsrv.failed = err.Error()
-	default:
-		gsrv.failed, gsrv.lastErr = err.Error(), err
-		gsrv.fails++
-		gsrv.retryAt = time.Now().Add(retryAfter(gsrv.fails))
-	}
-	gsrv.mu.Unlock()
-	return out, err
-}
-
-func guardClassifyTurn(texts []string) ([][]redact.Found, error) {
-	gsrv.mu.Lock()
-	m, gen := gsrv.m, gsrv.gen
-	gsrv.mu.Unlock()
-	if m == nil {
-		var err error
-		if m, gen, err = guardLoaded(); err != nil {
+func guardClassifier(run <-chan struct{}) func([]string) ([][]redact.Found, error) {
+	return func(texts []string) ([][]redact.Found, error) {
+		h, err := gsrv.load(run, launchGuard)
+		if err != nil {
 			return nil, err
 		}
-	}
-	out := make([][]redact.Found, len(texts))
-	for i, t := range texts {
-		for _, s := range m.Find(t) {
-			// the score as the cache file keeps it, so a restart doesn't
-			// move it over or under the threshold
-			out[i] = append(out[i], redact.Found{Start: s.Start, End: s.End, Label: guardLabel(s.Label),
-				Score: float64(float32(s.Score))})
+		found, err := h.classify(texts)
+		_, requestOnly := err.(requestError)
+		if err := gsrv.complete(run, h, err, requestOnly); err != nil {
+			return nil, err
 		}
+		return found, nil
 	}
-	gsrv.mu.Lock()
-	if gsrv.gen == gen && gsrv.m != nil { // not stopped meanwhile
-		if gsrv.idle != nil {
-			gsrv.idle.Stop()
-		}
-		gsrv.idle = time.AfterFunc(idleAfter, guardIdle)
-	}
-	gsrv.mu.Unlock()
-	return out, nil
 }
 
-// guardLoaded is the model, loaded by this request unless another
-// loaded it meanwhile, and the gen it was loaded in.
-func guardLoaded() (spanFinder, int, error) {
-	guardLoading.Lock()
-	defer guardLoading.Unlock()
-	gsrv.mu.Lock()
-	m, gen := gsrv.m, gsrv.gen
-	if m == nil {
-		gsrv.loading = true
-	}
-	gsrv.mu.Unlock()
-	if m != nil {
-		return m, gen, nil
-	}
+func launchGuard(stop <-chan struct{}) (*helper, error) {
 	if !guardInstalled() {
-		gsrv.mu.Lock()
-		gsrv.loading = false
-		gsrv.mu.Unlock()
-		return nil, gen, ErrNotInstalled
+		return nil, ErrNotInstalled
 	}
-	t := time.Now()
-	m, err := guardLoad(guardDir())
-	gsrv.mu.Lock()
-	gsrv.loading = false
-	if err == nil && gsrv.gen == gen {
-		gsrv.m, gsrv.loadMS = m, int(time.Since(t)/time.Millisecond)
-	}
-	gsrv.mu.Unlock()
-	if err != nil {
-		return nil, gen, fmt.Errorf("the local masking model didn't load: %w", err)
-	}
-	return m, gen, nil
-}
-
-// guardIdle lets the model go after idleAfter with no request, unless
-// one is on it now (it sets the timer again when done): it takes every
-// turn there is, and none if one is held.
-func guardIdle() {
-	n := 0
-	defer func() {
-		for range n {
-			<-guardTurn
-		}
-	}()
-	for n < cap(guardTurn) {
-		select {
-		case guardTurn <- struct{}{}:
-			n++
-		default:
-			return
-		}
-	}
-	guardUnload()
-}
-
-func guardUnload() {
-	gsrv.mu.Lock()
-	if gsrv.idle != nil {
-		gsrv.idle.Stop()
-		gsrv.idle = nil
-	}
-	gsrv.m = nil
-	gsrv.gen++
-	gsrv.mu.Unlock()
+	return guardStart(stop)
 }
 
 // guardLabels names the model's labels as Privacy Filter does, which is
@@ -316,16 +194,6 @@ func guardLabel(l string) string {
 	return l
 }
 
-func guardHeldBack() error {
-	gsrv.mu.Lock()
-	defer gsrv.mu.Unlock()
-	if gsrv.lastErr == nil || !time.Now().Before(gsrv.retryAt) {
-		return nil
-	}
-	return fmt.Errorf("%w; it is tried again in %s, and until then a request it hasn't read is held back at once. To send requests masked by the rules alone, turn the model off in Settings → Privacy",
-		gsrv.lastErr, time.Until(gsrv.retryAt).Round(time.Second))
-}
-
 // guardModel is AstrLink Guard as a Model.
 type guardModel struct{}
 
@@ -344,23 +212,14 @@ func (guardModel) Size() int64 { return guardSize() }
 func (guardModel) MinScore() float64 { return guard.MinScore }
 
 func (guardModel) Find(ctx context.Context, texts []string) ([][]redact.Found, error) {
-	return guardBackend.find(ctx, texts)
+	return guardBackend.findWith(ctx, texts, guardClassifier(gsrv.currentRun()))
 }
 
 func (guardModel) Now() Status {
 	s := Status{Model: AstrLinkGuard, ManagedWeights: true, Supported: true, Installed: guardInstalled(), Size: guardSize(), Rosetta: translated()}
 	gdl.fill(&s)
 	gsrv.mu.Lock()
-	if gsrv.m != nil {
-		s.Running, s.Device, s.LoadMS = true, "CPU", gsrv.loadMS
-		if b, ok := gsrv.m.(backender); ok {
-			var err error
-			if s.Via, s.Device, err = b.Backend(); err != nil {
-				s.GPUError = err.Error()
-			}
-		}
-	}
-	s.Failed, s.Loading = gsrv.failed, gsrv.loading
+	gsrv.fillStatusLocked(&s)
 	gsrv.mu.Unlock()
 	s.Waiting = int(guardBackend.waiting.Load())
 	return s
@@ -372,22 +231,12 @@ func (guardModel) Cancel() { gdl.stop() }
 
 func (guardModel) Warm() {
 	if guardInstalled() {
-		go func() {
-			guardBackend.turn <- struct{}{}
-			defer func() { <-guardBackend.turn }()
-			classifySafely(guardClassify, []string{"warm"})
-		}()
+		run := gsrv.currentRun()
+		gsrv.warm(run, guardClassifier(run))
 	}
 }
 
-// Stop lets the model go at once; a request reading it finishes with the
-// model it has.
-func (guardModel) Stop() {
-	guardUnload()
-	gsrv.mu.Lock()
-	gsrv.lastErr, gsrv.fails, gsrv.retryAt = nil, 0, time.Time{}
-	gsrv.mu.Unlock()
-}
+func (guardModel) Stop() { gsrv.stop(false) }
 
 func (g guardModel) Remove() error {
 	g.Cancel()

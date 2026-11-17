@@ -14,6 +14,11 @@
 // and each reply is u32 0 and, for each text in order, u32 count and count
 // times: i32 start, i32 end (byte offsets), f32 score, u8 len, the label;
 // or u32 1, u32 len and an error's text. Little-endian throughout.
+//
+// With MAGPIE_PII_PROTOCOL=2, the ready line includes "protocol":2.
+// The caller prefixes each request with a u32 ID. Every reply prefixes
+// the payload with that ID and a u32 device-update length. The device is
+// fixed for this process, so the update length is always zero.
 #include "pf.h"
 #include "ggml-backend.h"
 
@@ -91,6 +96,8 @@ int main(int argc, char ** argv) {
         return 2;
     }
     const float threshold = argc > 2 ? (float) std::atof(argv[2]) : 0.5f;
+    const char * protocol = std::getenv("MAGPIE_PII_PROTOCOL");
+    const bool framed = protocol && std::strcmp(protocol, "2") == 0;
     const auto t0 = std::chrono::steady_clock::now();
 
     const char * env = std::getenv("PF_DEVICE");
@@ -137,6 +144,9 @@ int main(int argc, char ** argv) {
     if (!gpu_error.empty()) {
         h += ",\"gpuError\":" + json_str(gpu_error);
     }
+    if (framed) {
+        h += ",\"protocol\":2";
+    }
     hello(h + "}");
 
     std::vector<std::string> texts;
@@ -145,6 +155,13 @@ int main(int argc, char ** argv) {
         unsigned char b[4];
         if (!read_all(b, 4)) {
             break;
+        }
+        uint32_t id = 0;
+        if (framed) {
+            id = le32(b);
+            if (!read_all(b, 4)) {
+                break;
+            }
         }
         const uint32_t n = le32(b);
         texts.assign(n, std::string());
@@ -160,13 +177,18 @@ int main(int argc, char ** argv) {
             break;
         }
         out.clear();
+        if (framed) {
+            put32(out, id);
+            put32(out, 0);
+        }
+        const size_t header = out.size();
         put32(out, 0);
         for (const std::string & t : texts) {
             pf_entity * ents = nullptr;
             size_t ne = 0;
             if (!t.empty() && pf_classify(ctx, t.data(), t.size(), threshold, &ents, &ne) != 0) {
                 const std::string e = pf_last_error(ctx) ? pf_last_error(ctx) : "classify failed";
-                out.clear();
+                out.resize(header);
                 put32(out, 1);
                 put32(out, (uint32_t) e.size());
                 out += e;
