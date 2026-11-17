@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -11,8 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/testenv"
@@ -379,7 +378,7 @@ func TestClaudeNeverRunsInAMaskedFolderUnmasked(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { settings.Save(settings.Settings{}) })
-	t.Cleanup(gwmw.Mask(masking.Masker{}))
+	t.Cleanup(privacyengine.EnableBuiltin())
 	dirs, work, _, _, told := claudeWorkDirsBody(t, "", nil, func(string) string {
 		// the bridge reads the request as the gateway's masking left it:
 		// the caller sent the folder as it is, and the masker stood in for

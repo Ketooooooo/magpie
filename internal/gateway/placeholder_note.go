@@ -8,8 +8,8 @@ import (
 
 	"github.com/tidwall/gjson"
 
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 )
 
 // placeholderNote tells a model that the placeholders masking put in a
@@ -70,7 +70,7 @@ func notesPlaceholders(p provider.Provider, from provider.Protocol, body []byte)
 // or with no placeholder or no place for it, is returned as it is; the
 // edit is made in place in the bytes, the rest as the client wrote it.
 func withPlaceholderNote(from provider.Protocol, body []byte) []byte {
-	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() || !redact.HasPlaceholder(string(body)) {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() || !privacyengine.HasBuiltinPlaceholder(string(body)) {
 		return body
 	}
 	switch from {
@@ -87,7 +87,9 @@ func withPlaceholderNote(from provider.Protocol, body []byte) []byte {
 }
 
 // holds says whether r's text has a placeholder.
-func holdsPlaceholder(r gjson.Result) bool { return r.Exists() && redact.HasPlaceholder(r.Raw) }
+func holdsPlaceholder(r gjson.Result) bool {
+	return r.Exists() && privacyengine.HasBuiltinPlaceholder(r.Raw)
+}
 
 // earliest is the index of the first element of the array r with a
 // placeholder, -1 for none.

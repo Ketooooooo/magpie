@@ -31,10 +31,20 @@ func installPrivacyEngine(t *testing.T) string {
 		"package.json": `{"name":"test-detector","magpie":{"privacy":{"id":"test-detector","name":"Local detector","protocol":"body-v1","entry":"privacy.mjs"}}}`,
 		"privacy.mjs": `
 const value = "` + testPrivateValue + `", token = "` + testPlaceholder + `";
+let block = true;
+export function applyRecordAction({id, targetRef}) {
+  if (id !== "mask-rule" || targetRef !== "detector-rule-v1" || !block) throw new Error("Unrecognized rule action");
+  block = false;
+}
 export function preview({body, texts}) {
   const hits = [];
   const mask = text => {
-    if (text.includes(value)) hits.push({kind:"EMAIL", placeholder:token, action:text.includes("hold this") ? "block" : ""});
+    if (text.includes(value)) {
+      const action = block && text.includes("hold this") ? "block" : "";
+      const hit = {kind:"EMAIL", placeholder:token, action};
+      if (action) hit.recordAction = {id:"mask-rule", label:"Mask this rule", scope:"Detector email", targetRef:"detector-rule-v1"};
+      hits.push(hit);
+    }
     return text.replaceAll(value, token);
   };
   return {...(body ? {body:mask(body)} : {texts:texts.map(mask)}), hits, restore:hits.length > 0};
@@ -111,6 +121,21 @@ func TestPrivacyEngineSwitchKeepsBothRecords(t *testing.T) {
 		t.Fatalf("expected an engine-specific block without forwarding: %d %s", code, reply)
 	}
 
+	blockedRecords, _ := maskrec.List(0, 1, maskrec.Filter{Blocked: true})
+	if len(blockedRecords) != 1 || len(blockedRecords[0].Actions) != 1 {
+		t.Fatalf("the blocked request did not record its action: %+v", blockedRecords)
+	}
+	selectEngine(privacyengine.Builtin)
+	if err := privacyengine.ApplyRecordAction(t.Context(), blockedRecords[0].Key, "mask-rule"); err != nil {
+		t.Fatal(err)
+	}
+	selectEngine(testPrivacyEngine)
+	f.got = nil
+	if code, _ := post(t, path, blocked); code != http.StatusOK ||
+		!strings.Contains(string(f.got), testPlaceholder) || strings.Contains(string(f.got), testPrivateValue) {
+		t.Fatalf("the retried request should reach the vendor with the value masked: %d", code)
+	}
+
 	if err := plugin.SetOff(dir, true); err != nil {
 		t.Fatal(err)
 	}
@@ -152,5 +177,25 @@ func TestHostedPrivacyArchiveKeepsOnlyProtectedRequest(t *testing.T) {
 	a := archives[0]
 	if strings.Contains(a.Request.Body, testPrivateValue) || !strings.Contains(a.Request.Body, testPlaceholder) || a.Response.Body != "" {
 		t.Fatal("archive must keep the protected request and omit the restored reply")
+	}
+}
+
+func TestModelAttemptRejectsMissingPrivacyResult(t *testing.T) {
+	f := &fake{ctype: "application/json", reply: `{"choices":[{"message":{"content":"ok"}}]}`}
+	setup(t, provider.Chat, f)
+	if err := settings.Save(settings.Settings{Redact: true, RedactModelOff: true}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := provider.Find("fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const body = `{"model":"fake/m1","messages":[{"role":"user","content":"demo@privacy-engine.internal"}]}`
+	r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+	out := httptest.NewRecorder()
+	code, _ := New().attempt(out, r, provider.Chat, *p, "m1", []byte(body), &Call{})
+	if code != http.StatusServiceUnavailable || out.Code != code || len(f.got) != 0 ||
+		!strings.Contains(out.Body.String(), "nothing was sent") {
+		t.Fatalf("request without a privacy result reached the model path: %d %s", code, out.Body)
 	}
 }

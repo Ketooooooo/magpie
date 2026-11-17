@@ -1,6 +1,7 @@
 package gui
 
 import (
+	"github.com/yetone/magpie/internal/privacyengine"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -33,9 +34,8 @@ func TestRedactRuleEdit(t *testing.T) {
 		t.Fatalf("rules not set: %d %s", rec.Code, rec.Body)
 	}
 	masks := func(s string) bool {
-		st := settings.Load()
-		_, n := redact.Mask(s, redact.Options{Secrets: true, Rules: st.RedactRules})
-		return n > 0
+		_, hits, _, err := privacyengine.Preview(t.Context(), settings.Load(), s)
+		return err == nil && len(hits) > 0
 	}
 	// each check a value of its own: one masked once is masked again
 	// wherever it turns up (redact's known values)

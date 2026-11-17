@@ -63,10 +63,9 @@ func (s *Server) glmSearch(ctx context.Context, p provider.Provider, query strin
 	for _, k := range keys {
 		ctx, _ := withSearchWire(ctx, k.Key)
 		start := time.Now()
-		pages, err := s.glmSearchKey(ctx, k, query)
-		s.logOwnSearch(ctx, k, provider.ZhipuCodingSearch(k), query, start, len(pages), err)
+		said, hits, err := s.glmSearchKey(ctx, k, query)
+		s.logOwnSearch(ctx, k, provider.ZhipuCodingSearch(k), query, start, len(hits), err)
 		if err == nil {
-			said, hits := pagesSaid(pages)
 			return said, hits, nil
 		}
 		if len(keys) > 1 {
@@ -81,24 +80,25 @@ func (s *Server) glmSearch(ctx context.Context, p provider.Provider, query strin
 }
 
 // glmSearchKey asks the MCP server with p's key.
-func (s *Server) glmSearchKey(ctx context.Context, p provider.Provider, query string) ([]foundPage, error) {
+func (s *Server) glmSearchKey(ctx context.Context, p provider.Provider, query string) (said string, hits []Hit, err error) {
 	at := provider.ZhipuCodingSearch(p)
 	ctx, cancel := context.WithTimeout(s.metered(p.Via(ctx), p, ""), searchTimeout/2)
 	defer cancel()
-	q, err := maskedQuery(ctx, query, &p)
+	q, session, err := maskedQuery(ctx, query, &p)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
+	defer finishSearchPrivacy(ctx, session, &said, &err)
 	c := glmMCP{s: s, at: at, key: p.Key}
 	if _, err := c.call(ctx, 1, "initialize", map[string]any{"protocolVersion": glmSearchProtocol, "capabilities": map[string]any{},
 		"clientInfo": map[string]any{"name": "magpie-search", "version": "1"}}); err != nil {
-		return nil, c.said(ctx, err)
+		return "", nil, c.said(ctx, err)
 	}
 	defer c.end()
 	c.note(ctx, "notifications/initialized")
 	res, err := c.call(ctx, 2, "tools/call", map[string]any{"name": glmSearchTool, "arguments": map[string]any{"search_query": q}})
 	if err != nil {
-		return nil, c.said(ctx, err)
+		return "", nil, c.said(ctx, err)
 	}
 	var out struct {
 		Content []struct {
@@ -108,7 +108,7 @@ func (s *Server) glmSearchKey(ctx context.Context, p provider.Provider, query st
 		IsError bool `json:"isError"`
 	}
 	if err := json.Unmarshal(res, &out); err != nil {
-		return nil, fmt.Errorf("unexpected reply: %s", clipText(string(res), 300))
+		return "", nil, fmt.Errorf("unexpected reply: %s", clipText(string(res), 300))
 	}
 	var texts []string
 	for _, b := range out.Content {
@@ -117,7 +117,7 @@ func (s *Server) glmSearchKey(ctx context.Context, p provider.Provider, query st
 		}
 	}
 	if out.IsError {
-		return nil, errors.New(c.masked(clipText(cmp.Or(strings.Join(texts, " "), "the search tool failed"), 500)))
+		return "", nil, errors.New(c.masked(clipText(cmp.Or(strings.Join(texts, " "), "the search tool failed"), 500)))
 	}
 	var pages []foundPage
 	n := searchCount(ctx)
@@ -133,11 +133,12 @@ func (s *Server) glmSearchKey(ctx context.Context, p provider.Provider, query st
 			!strings.HasPrefix(strings.TrimSpace(texts[0]), `"`) {
 			// words, not results: what the tool said instead (a spent
 			// allowance, a refusal)
-			return nil, errors.New(c.masked(clipText(texts[0], 500)))
+			return "", nil, errors.New(c.masked(clipText(texts[0], 500)))
 		}
-		return nil, errFoundNothing
+		return "", nil, errFoundNothing
 	}
-	return pages, nil
+	said, hits = pagesSaid(pages)
+	return said, hits, nil
 }
 
 // readGLMSearch reads the pages out of the search tool's text (see the

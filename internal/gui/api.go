@@ -50,9 +50,9 @@ import (
 	"github.com/yetone/magpie/internal/notices"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/privacyengine"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/profile"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/settingsapi"
@@ -2821,9 +2821,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		s := settings.Load()
-		s.RedactRules = in.Rules
-		if err := settings.Save(s); err != nil {
+		if err := privacyengine.SetBuiltinRules(in.Rules); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -2842,14 +2840,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		s := settings.Load()
-		next, err := editRedactRule(s.RedactRules, in.At, in.Was, in.Rule)
-		if err != nil {
-			fail(rw, err)
-			return
-		}
-		s.RedactRules = next
-		if err := settings.Save(s); err != nil {
+		if err := privacyengine.UpdateBuiltinRule(in.At, in.Was, in.Rule); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -2865,9 +2856,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		s := settings.Load()
-		s.RedactActions = in.Actions
-		if err := settings.Save(s); err != nil {
+		if err := privacyengine.SetBuiltinActions(in.Actions); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -2882,9 +2871,7 @@ func Handler(w Windows, gw *gateway.Server) http.Handler {
 			fail(rw, err)
 			return
 		}
-		s := settings.Load()
-		s.RedactAllow = in.Allow
-		if err := settings.Save(s); err != nil {
+		if err := privacyengine.SetBuiltinAllow(in.Allow); err != nil {
 			fail(rw, err)
 			return
 		}
@@ -3706,32 +3693,6 @@ func loginUsers(agent string) []string {
 		}
 	}
 	return out
-}
-
-// editRedactRule is rules with the one at at, which must still be was,
-// changed to to: tidied and checked as an added rule is, in the same place.
-// It is refused when that rule is no longer there (changed or removed
-// meanwhile), when to has neither a prefix nor a pattern (taking a rule
-// away is Remove), and when to is another rule already listed.
-func editRedactRule(rules []redact.Rule, at int, was, to redact.Rule) ([]redact.Rule, error) {
-	if at < 0 || at >= len(rules) || rules[at] != was {
-		return nil, fmt.Errorf("that masking rule is no longer there: it was changed or removed meanwhile")
-	}
-	tidy, err := redact.CheckRules([]redact.Rule{to})
-	if err != nil {
-		return nil, err
-	}
-	if len(tidy) == 0 {
-		return nil, fmt.Errorf("a masking rule needs a prefix or a regular expression")
-	}
-	for i, o := range rules {
-		if i != at && o == tidy[0] {
-			return nil, fmt.Errorf("the masking rule %s is there already", o.Kind)
-		}
-	}
-	next := slices.Clone(rules)
-	next[at] = tidy[0]
-	return next, nil
 }
 
 // countClient is the user's ClientAgents with client counted as the agent

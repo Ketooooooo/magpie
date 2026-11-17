@@ -13,8 +13,8 @@ import (
 
 	"github.com/tidwall/gjson"
 
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -35,7 +35,7 @@ func TestPlaceholderNoteIsNeutral(t *testing.T) {
 	if regexp.MustCompile(`\{\{[A-Z][A-Z0-9_]*_[a-z2-7]{8}\}\}`).MatchString(ex) {
 		t.Errorf("the note's example %s is a placeholder masking could write", ex)
 	}
-	if got := redact.Restore(placeholderNote, false); got != placeholderNote {
+	if got := privacyengine.BuiltinForTest().Restore(placeholderNote, false); got != placeholderNote {
 		t.Errorf("the note is changed when values are put back: %s", got)
 	}
 }

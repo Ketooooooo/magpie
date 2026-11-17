@@ -265,7 +265,7 @@ func SetProviderOptions(ctx context.Context) error {
 		forgetProviders()
 		return nil
 	}
-	err := Call(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
+	err := callHost(ctx, "setProviderOptions", map[string]any{"options": settings.Load().PluginOptions}, nil)
 	forgetProviders()
 	return err
 }
@@ -330,7 +330,7 @@ func forgetProviders() {
 // need be, and keeps the answer for Cached.
 func Providers(ctx context.Context) ([]Provider, error) {
 	var ps []Provider
-	if err := Call(ctx, "providers", listingArgs(), &ps); err != nil {
+	if err := callHost(ctx, "providers", listingArgs(), &ps); err != nil {
 		return nil, err
 	}
 	ps = commitProviders(ps, nil)
@@ -833,7 +833,7 @@ type KeptSignedIn struct {
 // and waits for it.
 func KeepSignedIn(ctx context.Context, provider, account string) (KeptSignedIn, error) {
 	var k KeptSignedIn
-	err := Call(ctx, "keepSignedIn", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &k)
+	err := callHost(ctx, "keepSignedIn", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &k)
 	return k, err
 }
 
@@ -963,7 +963,7 @@ func NextPrompt(ctx context.Context, provider string, method int, inputs map[str
 	var r struct {
 		Prompt *Prompt `json:"prompt"`
 	}
-	err := Call(ctx, "prompt", map[string]any{"provider": provider, "method": method, "inputs": inputs}, &r)
+	err := callHost(ctx, "prompt", map[string]any{"provider": provider, "method": method, "inputs": inputs}, &r)
 	return r.Prompt, err
 }
 
@@ -973,7 +973,7 @@ func Validate(ctx context.Context, provider string, method int, key, value strin
 	var r struct {
 		Error *string `json:"error"`
 	}
-	if err := Call(ctx, "validate", map[string]any{"provider": provider, "method": method, "key": key, "value": value}, &r); err != nil {
+	if err := callHost(ctx, "validate", map[string]any{"provider": provider, "method": method, "key": key, "value": value}, &r); err != nil {
 		return "", err
 	}
 	if r.Error == nil {
@@ -1011,7 +1011,7 @@ func Authorize(ctx context.Context, provider string, method int, inputs map[stri
 		Error string `json:"error"`
 		Authorization
 	}
-	if err := Call(ctx, "authorize", map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
+	if err := callHost(ctx, "authorize", map[string]any{"provider": provider, "method": method, "inputs": inputs, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
 		return Authorization{}, err
 	}
 	if !r.OK {
@@ -1047,7 +1047,7 @@ func Finish(ctx context.Context, session, code string) (Saved, error) {
 		Error string `json:"error"`
 		Saved
 	}
-	if err := Call(ctx, "callback", map[string]any{"session": session, "code": code}, &r); err != nil {
+	if err := callHost(ctx, "callback", map[string]any{"session": session, "code": code}, &r); err != nil {
 		return Saved{}, err
 	}
 	if !r.OK {
@@ -1064,7 +1064,7 @@ func APIKey(ctx context.Context, provider string, method int, inputs map[string]
 		Error string `json:"error"`
 		Saved
 	}
-	if err := Call(ctx, "apiKey", map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
+	if err := callHost(ctx, "apiKey", map[string]any{"provider": provider, "method": method, "inputs": inputs, "key": key, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
 		return Saved{}, err
 	}
 	if !r.OK {
@@ -1091,7 +1091,7 @@ func ImportFiles(ctx context.Context, provider string, texts []string) ([]Import
 	var r struct {
 		Results []Imported `json:"results"`
 	}
-	if err := Call(ctx, "importFiles", map[string]any{"provider": provider, "texts": texts, "proxy": proxyOf(ctx)}, &r); err != nil {
+	if err := callHost(ctx, "importFiles", map[string]any{"provider": provider, "texts": texts, "proxy": proxyOf(ctx)}, &r); err != nil {
 		return nil, err
 	}
 	return r.Results, nil
@@ -1101,7 +1101,7 @@ func ImportFiles(ctx context.Context, provider string, texts []string) ([]Import
 // is "".
 func SignOut(ctx context.Context, provider, account string) error {
 	if Running() {
-		return Call(ctx, "signOut", map[string]any{"provider": provider, "account": account}, nil)
+		return callHost(ctx, "signOut", map[string]any{"provider": provider, "account": account}, nil)
 	}
 	unlock := lockAuth()
 	defer unlock()
@@ -1161,7 +1161,7 @@ func LoaderOptions(ctx context.Context, provider, account string) (Options, erro
 	if ok {
 		return o, nil
 	}
-	if err := Call(ctx, "load", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &o); err != nil {
+	if err := callHost(ctx, "load", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &o); err != nil {
 		return Options{}, err
 	}
 	optMu.Lock()
@@ -1188,7 +1188,7 @@ func Import(ctx context.Context, provider string, auth map[string]any) (string, 
 	var r struct {
 		Account string `json:"account"`
 	}
-	if err := Call(ctx, "import", map[string]any{"provider": provider, "auth": auth}, &r); err != nil {
+	if err := callHost(ctx, "import", map[string]any{"provider": provider, "auth": auth}, &r); err != nil {
 		return "", err
 	}
 	return r.Account, nil
@@ -1210,7 +1210,7 @@ type Checked struct {
 // models hook falling back to a list it keeps proves nothing.
 func Check(ctx context.Context, provider, account string) (Checked, error) {
 	var r Checked
-	if err := Call(ctx, "check", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
+	if err := callHost(ctx, "check", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &r); err != nil {
 		return Checked{}, err
 	}
 	return r, nil
@@ -1238,7 +1238,7 @@ func Take(ctx context.Context, provider string, keys []string) (map[string]map[s
 	var r struct {
 		Auths map[string]map[string]any `json:"auths"`
 	}
-	if err := Call(ctx, "take", map[string]any{"provider": provider, "accounts": keys}, &r); err != nil {
+	if err := callHost(ctx, "take", map[string]any{"provider": provider, "accounts": keys}, &r); err != nil {
 		return nil, err
 	}
 	return r.Auths, nil
@@ -1246,7 +1246,7 @@ func Take(ctx context.Context, provider string, keys []string) (map[string]map[s
 
 // Restore puts auth back as provider's account key.
 func Restore(ctx context.Context, provider, key string, auth map[string]any) error {
-	return Call(ctx, "import", map[string]any{"provider": provider, "key": key, "auth": auth}, nil)
+	return callHost(ctx, "import", map[string]any{"provider": provider, "key": key, "auth": auth}, nil)
 }
 
 // Usage is how much of its allowance one account has used, as the
@@ -1323,7 +1323,7 @@ type Checkin struct {
 // day.
 func AccountCheckin(ctx context.Context, provider, account string) (Checkin, error) {
 	var c Checkin
-	err := Call(ctx, "checkin", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &c)
+	err := callHost(ctx, "checkin", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &c)
 	return c, err
 }
 
@@ -1349,13 +1349,13 @@ func AccountCalls(ctx context.Context, provider, account string, since time.Time
 	var r struct {
 		Calls []OutsideCall `json:"calls"`
 	}
-	err := Call(ctx, "calls", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx), "since": since.UnixMilli()}, &r)
+	err := callHost(ctx, "calls", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx), "since": since.UnixMilli()}, &r)
 	return r.Calls, err
 }
 
 // AccountUsage asks the plugin for account's usage of provider.
 func AccountUsage(ctx context.Context, provider, account string) (Usage, error) {
 	var u Usage
-	err := Call(ctx, "usage", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &u)
+	err := callHost(ctx, "usage", map[string]any{"provider": provider, "account": account, "proxy": proxyOf(ctx)}, &u)
 	return u, err
 }

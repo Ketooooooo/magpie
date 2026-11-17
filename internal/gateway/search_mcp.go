@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"log"
 	"math"
@@ -290,6 +291,10 @@ func (s *Server) searchMCPRun(r *http.Request, query string, count *int, scope *
 		return "", err
 	}
 	defer release()
+	r, err = pinPrivacySettings(r)
+	if err != nil {
+		return "", privacyengine.ErrUnprotected
+	}
 	ctx := context.WithValue(r.Context(), searchForKey{}, &CallFor{Agent: callerOf(r).agent, MCP: true})
 	if count != nil {
 		ctx = withSearchCount(ctx, *count)
@@ -306,9 +311,7 @@ func (s *Server) searchMCPRun(r *http.Request, query string, count *int, scope *
 		}
 		return "", searchMCPError(msg)
 	}
-	// what was masked on the way out (maskedQuery, or the searcher's
-	// request) is the agent's own: it gets it back
-	return restored(said, false), nil
+	return said, nil
 }
 
 // readMCPBody reads a request body of at most limit bytes, answering 413

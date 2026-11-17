@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 )
 
 // Settings lists the kinds of personal data the gateway masks, in
@@ -25,7 +25,7 @@ func TestRedactKindsAreRedacts(t *testing.T) {
 		got = append(got, m[1]+"="+m[2])
 	}
 	var want []string
-	for _, c := range redact.Categories {
+	for _, c := range redact.Categories() {
 		if c.On {
 			want = append(want, c.ID+"=true")
 		} else {

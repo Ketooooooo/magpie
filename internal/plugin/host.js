@@ -3576,6 +3576,13 @@ async function fetchAs(id, record, key, params) {
 // ---- the loop ----------------------------------------------------------------
 
 const handlers = {
+  async privacyRecordAction(p, signal) {
+    const entry = await import(pathToFileURL(p.entry).href)
+    if (typeof entry.applyRecordAction !== "function") throw new Error("This privacy engine no longer supports this action")
+    signal.throwIfAborted()
+    const { id, targetRef } = p.input
+    await entry.applyRecordAction({ id, targetRef }, { directory: p.directory, signal })
+  },
   async privacyPreview(p, signal) {
     const entry = await import(pathToFileURL(p.entry).href)
     if (typeof entry.preview !== "function") throw new Error("Privacy plugin exports no preview function")

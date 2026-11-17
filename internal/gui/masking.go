@@ -2,6 +2,7 @@ package gui
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -25,8 +26,9 @@ const valuesMax = 2000
 type maskedRecord struct {
 	maskrec.Record
 	// Key is a string, as gateway.Masked's: a JS number rounds it
-	Key    int64         `json:"key,string"`
-	Values []maskedValue `json:"values,omitempty"`
+	Key     int64               `json:"key,string"`
+	Values  []maskedValue       `json:"values,omitempty"`
+	Actions []gwmw.RecordAction `json:"actions,omitempty"`
 }
 
 type maskedValue struct {
@@ -34,25 +36,20 @@ type maskedValue struct {
 	Known bool `json:"known,omitempty"`
 }
 
-// teller is the served masker, where it can say what a placeholder stood
-// for.
-func teller() (gwmw.Teller, bool) {
-	m, ok := gwmw.Served()
-	if !ok {
-		return nil, false
-	}
-	t, ok := m.(gwmw.Teller)
-	return t, ok
-}
-
-func shownRecord(r maskrec.Record, t gwmw.Teller) maskedRecord {
+func shownRecord(r maskrec.Record) maskedRecord {
 	out := maskedRecord{Record: r, Key: r.Key}
+	for _, action := range privacyengine.RecordActions(r) {
+		action.TargetRef = ""
+		out.Actions = append(out.Actions, action)
+	}
+	placeholders := make([]string, 0, len(r.Values))
 	for _, v := range r.Values {
-		mv := maskedValue{Value: v}
-		if t != nil && (r.Engine == "" || r.Engine == privacyengine.Builtin) {
-			_, mv.Known = t.Value(v.Placeholder)
-		}
-		out.Values = append(out.Values, mv)
+		placeholders = append(placeholders, v.Placeholder)
+	}
+	values := privacyengine.RecordValues(r, placeholders)
+	for _, v := range r.Values {
+		_, known := values[v.Placeholder]
+		out.Values = append(out.Values, maskedValue{Value: v, Known: known})
 	}
 	return out
 }
@@ -63,13 +60,10 @@ func shownRecord(r maskrec.Record, t gwmw.Teller) maskedRecord {
 //     a page of records, newest first (kind may list several, split by
 //     commas; blocked=1 keeps the requests held back);
 //   - GET /api/masking/record?key= one record;
-//   - GET /api/masking/value?p= what a placeholder stood for, while this
-//     magpie's masker remembers it (404 after a restart: it is never on
-//     disk);
 //   - GET /api/masking/sent?key= the body a record's request went to its
 //     vendor with, masked, while this magpie keeps it (the latest
 //     maskrec keeps; 404 after a restart);
-//   - POST /api/masking/values {ps} what each placeholder stood for, of
+//   - POST /api/masking/values {recordKey, ps} what each placeholder stood for, of
 //     those the masker still remembers, for the page to show the request
 //     as the agent sent it;
 //   - POST /api/masking/clear deletes every record kept (maskrec.Clear),
@@ -77,11 +71,6 @@ func shownRecord(r maskrec.Record, t gwmw.Teller) maskedRecord {
 //   - POST /api/masking/preview {text} the text as a vendor would get it
 //     under the settings now, and what was found, each told by its kind
 //     and hint, never its value; nothing of it is remembered (#1977);
-//   - POST /api/masking/allow {p} adds what a placeholder stood for to
-//     Never mask (settings' RedactAllow, which redact-allow sets whole),
-//     so a value masked by mistake goes as written from the next request
-//     on (yew_fence on Discord). The masker is asked for the value, so
-//     only one it masked is added; 404 once it no longer knows it.
 func maskingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/privacy-engine", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
@@ -98,39 +87,24 @@ func maskingRoutes(mux *http.ServeMux) {
 		writeJSON(rw, settingsState())
 	})
 
-	mux.HandleFunc("POST /api/masking/allow", func(rw http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/masking/record-action", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
-			P string `json:"p"`
+			Key int64  `json:"recordKey,string"`
+			ID  string `json:"actionId"`
 		}
-		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&in); err != nil {
-			fail(rw, err)
+		decoder := json.NewDecoder(http.MaxBytesReader(rw, r.Body, 4096))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&in); err != nil || decoder.Decode(new(any)) != io.EOF || in.Key <= 0 || in.ID == "" {
+			fail(rw, errors.New("Expected a masking record and an action ID"))
 			return
 		}
-		t, ok := teller()
-		if !ok {
-			http.NotFound(rw, r)
-			return
-		}
-		v, ok := t.Value(in.P)
-		if !ok {
-			http.NotFound(rw, r)
-			return
-		}
-		// a settings file that can't be read is unknown, not empty: the
-		// list it holds is never written over with this one value
-		s, err := settings.LoadChecked()
-		if err != nil {
-			fail(rw, err)
-			return
-		}
-		// Save trims the list and keeps each value once, whatever its case
-		s.RedactAllow = append(s.RedactAllow, v)
-		if err := settings.Save(s); err != nil {
+		if err := privacyengine.ApplyRecordAction(r.Context(), in.Key, in.ID); err != nil {
 			fail(rw, err)
 			return
 		}
 		writeJSON(rw, settingsState())
 	})
+
 	mux.HandleFunc("POST /api/masking/preview", func(rw http.ResponseWriter, r *http.Request) {
 		var in struct {
 			Text string `json:"text"`
@@ -182,10 +156,9 @@ func maskingRoutes(mux *http.ServeMux) {
 		before, _ := strconv.ParseInt(q.Get("before"), 10, 64)
 		limit, _ := strconv.Atoi(q.Get("limit"))
 		rs, more := maskrec.List(before, min(max(limit, 1), 200), maskrec.Filter{Kind: q.Get("kind"), By: q.Get("by"), Agent: q.Get("agent"), Provider: q.Get("provider"), Blocked: q.Get("blocked") == "1"})
-		t, _ := teller()
 		out := []maskedRecord{}
 		for _, rec := range rs {
-			out = append(out, shownRecord(rec, t))
+			out = append(out, shownRecord(rec))
 		}
 		writeJSON(rw, map[string]any{"records": out, "more": more})
 	})
@@ -196,22 +169,7 @@ func maskingRoutes(mux *http.ServeMux) {
 			http.NotFound(rw, r)
 			return
 		}
-		t, _ := teller()
-		writeJSON(rw, shownRecord(rec, t))
-	})
-	mux.HandleFunc("GET /api/masking/value", func(rw http.ResponseWriter, r *http.Request) {
-		rw.Header().Set("Cache-Control", "no-store")
-		t, ok := teller()
-		if !ok {
-			http.NotFound(rw, r)
-			return
-		}
-		v, ok := t.Value(r.URL.Query().Get("p"))
-		if !ok {
-			http.NotFound(rw, r)
-			return
-		}
-		writeJSON(rw, map[string]string{"value": v})
+		writeJSON(rw, shownRecord(rec))
 	})
 	mux.HandleFunc("GET /api/masking/sent", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Cache-Control", "no-store")
@@ -226,20 +184,18 @@ func maskingRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/masking/values", func(rw http.ResponseWriter, r *http.Request) {
 		rw.Header().Set("Cache-Control", "no-store")
 		var in struct {
-			Ps []string `json:"ps"`
+			Key int64    `json:"recordKey,string"`
+			Ps  []string `json:"ps"`
 		}
 		if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&in); err != nil {
 			fail(rw, err)
 			return
 		}
-		out := map[string]string{}
-		if t, ok := teller(); ok {
-			for _, p := range in.Ps[:min(len(in.Ps), valuesMax)] {
-				if v, ok := t.Value(p); ok {
-					out[p] = v
-				}
-			}
+		record, ok := maskrec.Get(in.Key)
+		if !ok {
+			http.NotFound(rw, r)
+			return
 		}
-		writeJSON(rw, map[string]any{"values": out})
+		writeJSON(rw, map[string]any{"values": privacyengine.RecordValues(record, in.Ps[:min(len(in.Ps), valuesMax)])})
 	})
 }

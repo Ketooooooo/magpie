@@ -27,6 +27,7 @@ type valAgg struct {
 	len            int
 	n, requests    int
 	last           time.Time
+	recordKey      int64
 }
 
 func newDay() *dayAgg {
@@ -55,8 +56,8 @@ func (a *dayAgg) add(r Record) {
 		}
 		x.n += v.N
 		x.requests++
-		if r.Time.After(x.last) {
-			x.last = r.Time
+		if r.Key > x.recordKey {
+			x.last, x.recordKey = r.Time, r.Key
 		}
 		addTo(a.agents, r.Agent, v)
 		addTo(a.providers, r.Provider, v)
@@ -116,6 +117,7 @@ type Seen struct {
 	N           int       `json:"n"`
 	Requests    int       `json:"requests"`
 	Last        time.Time `json:"last"`
+	RecordKey   int64     `json:"recordKey,omitempty,string"`
 }
 
 // Summary is what masking did over some days.
@@ -188,8 +190,8 @@ func Sum(days int) Summary {
 			}
 			s.N += v.n
 			s.Requests += v.requests
-			if v.last.After(s.Last) {
-				s.Last = v.last
+			if v.recordKey > s.RecordKey {
+				s.Last, s.RecordKey = v.last, v.recordKey
 			}
 			kindVals[v.kind][p] = true
 		}

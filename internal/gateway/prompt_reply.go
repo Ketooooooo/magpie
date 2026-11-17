@@ -10,8 +10,8 @@ import (
 	"context"
 	"encoding/json"
 
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 )
 
 // PromptReply is a request's reply, piece by piece: the answer's text, its

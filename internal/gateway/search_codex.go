@@ -102,13 +102,14 @@ func (s *Server) codexSearchBy(ctx context.Context, p provider.Provider, query s
 }
 
 // codexSearch asks the ChatGPT backend's search, as Codex's web.run does.
-func (s *Server) codexSearch(ctx context.Context, p provider.Provider, query string) (string, []Hit, error) {
+func (s *Server) codexSearch(ctx context.Context, p provider.Provider, query string) (said string, hits []Hit, err error) {
 	ctx, cancel := context.WithTimeout(s.metered(p.Via(ctx), p, ""), searchTimeout/2)
 	defer cancel()
-	q, err := maskedQuery(ctx, unscoped(ctx, query), &p)
+	q, session, err := maskedQuery(ctx, unscoped(ctx, query), &p)
 	if err != nil {
 		return "", nil, err
 	}
+	defer finishSearchPrivacy(ctx, session, &said, &err)
 	// the model a search names is the turn's in Codex; the backend answers
 	// the same whichever it is, so the account's own small model
 	model := searcherModel(p)
@@ -193,7 +194,7 @@ func (s *Server) codexSearch(ctx context.Context, p provider.Provider, query str
 	if len(pages) == 0 {
 		return "", nil, fmt.Errorf("%s%w", who, errFoundNothing)
 	}
-	said, hits := pagesSaid(pages)
+	said, hits = pagesSaid(pages)
 	return said, hits, nil
 }
 

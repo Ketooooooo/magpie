@@ -10,10 +10,6 @@
 //     request as it was. A Run that is also Tried changes the body again
 //     for each provider the gateway tries the request on, and one that is
 //     also Accounts can have an account passed over for the request.
-//   - Masker: what magpie sends to a vendor, masked as the settings say,
-//     and what the vendor answers with the values back. The redact plugin
-//     registers it. It fails closed: when the settings ask for masking and
-//     no masker is served, or the masker fails, nothing is sent.
 package gwmw
 
 import (
@@ -116,6 +112,18 @@ type Masker interface {
 type Hit struct {
 	Kind, By, Placeholder, Action, Head string
 	Len                                 int
+	RecordAction                        *RecordAction `json:"recordAction,omitempty"`
+}
+
+// RecordAction is offered by the engine on a hit. The target is for that
+// engine alone and must not contain an original value.
+type RecordAction struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Scope          string `json:"scope,omitempty"`
+	Placeholder    string `json:"placeholder,omitempty"`
+	DisabledReason string `json:"disabledReason,omitempty"`
+	TargetRef      string `json:"targetRef,omitempty"`
 }
 
 // Blocks says hits have a value the user asked to hold a request back
@@ -153,7 +161,6 @@ type ContextTeller interface {
 var (
 	mu      sync.Mutex
 	agents  []*Agent
-	maskers []*Masker
 	refresh func()
 )
 
@@ -188,13 +195,7 @@ func Agents() []Agent {
 	return out
 }
 
-// Mask serves m until remove. Registering one while another is served
-// stacks: the last serves until it is removed.
-func Mask(m Masker) (remove func()) { return add(&maskers, m) }
-
-// Refresh sets what the gateway asks when masking is wanted and no masker
-// is served: pluginrt's refresh, which turns the plugin on when the
-// settings ask for masking. stop takes it away.
+// Refresh sets how the gateway refreshes missing agent middleware.
 func Refresh(f func()) (stop func()) {
 	mu.Lock()
 	refresh = f
@@ -228,7 +229,7 @@ func (t *throttle) ask(f func(), want func() bool) {
 	}
 }
 
-var forMasking, forAgents throttle
+var forAgents throttle
 
 func refreshFunc() func() {
 	mu.Lock()
@@ -250,50 +251,8 @@ func AgentsWanted(want func() bool) []Agent {
 	return Agents()
 }
 
-func served() (Masker, func()) {
-	mu.Lock()
-	defer mu.Unlock()
-	if n := len(maskers); n > 0 {
-		return *maskers[n-1], nil
-	}
-	return nil, refresh
-}
-
-// ForgetRefreshForTest lets the next Served refresh at once, as it would a
-// second after the last one.
-func ForgetRefreshForTest() {
-	forMasking.last.Store(0)
-	forAgents.last.Store(0)
-}
-
-// ErrUnmasked is the error a request gets when masking is wanted and
-// nothing can mask it.
-var ErrUnmasked = fmt.Errorf("masking is on in magpie's Settings → Privacy, but the redact plugin isn't serving it, so nothing was sent; turn the plugin on in Settings → Plugins")
-
-// Served is the masker that serves now. With none, one refresh is asked
-// (at most once a second, never from inside one) and it is looked for
-// again: the settings asking for masking turn the plugin on.
-func Served() (Masker, bool) {
-	m, f := served()
-	if m != nil || f == nil {
-		return m, m != nil
-	}
-	forMasking.ask(f, nil)
-	m, _ = served()
-	return m, m != nil
-}
-
-// Masking is the masker for a request: nil, nil when masking isn't wanted;
-// ErrUnmasked when it is and none serves. Fail closed.
-func Masking(wanted bool) (Masker, error) {
-	if !wanted {
-		return nil, nil
-	}
-	if m, ok := Served(); ok {
-		return m, nil
-	}
-	return nil, ErrUnmasked
-}
+// ForgetRefreshForTest resets the agent middleware's refresh interval.
+func ForgetRefreshForTest() { forAgents.last.Store(0) }
 
 // Safely runs a masker's call: one that panics is an error, not a request
 // sent as it is.

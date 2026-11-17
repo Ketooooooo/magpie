@@ -2,14 +2,13 @@ package gateway
 
 import (
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
 
-	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
@@ -18,7 +17,7 @@ import (
 // countedMasker is the built-in masker, counting the bodies it is asked
 // to mask.
 type countedMasker struct {
-	m masking.Masker
+	m builtinMasker
 	n *atomic.Int64
 }
 
@@ -85,7 +84,7 @@ func TestUnmaskedRouteIsNotMasked(t *testing.T) {
 			}
 			withoutMasker(t)
 			n := new(atomic.Int64)
-			t.Cleanup(gwmw.Mask(countedMasker{n: n}))
+			t.Cleanup(privacyengine.RegisterBuiltinForTest(countedMasker{m: privacyengine.BuiltinForTest(), n: n}))
 			s := New()
 			rec := httptest.NewRecorder()
 			s.Handler().ServeHTTP(rec, httptest.NewRequest("POST", "/v1/messages", strings.NewReader(chat)))

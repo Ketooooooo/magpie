@@ -10,6 +10,7 @@ import (
 
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/maskrec"
+	"github.com/yetone/magpie/internal/privacyengine"
 )
 
 // Masked is what masking swapped in a request, for the Routing page and
@@ -117,7 +118,9 @@ func noteMaskedUntil(r *http.Request, what string, h maskHits, sent string, rout
 // noteBlocked records a request held back for a value the user set to
 // block: what it had, nothing of what it would have sent.
 func noteBlocked(h maskHits) {
-	maskrec.Add(maskrec.Record{Engine: h.engine, EngineName: h.engineName, What: "blocked", N: h.n, Values: valuesOf(h.hits), Blocked: true})
+	record := maskrec.Record{Engine: h.engine, EngineName: h.engineName, What: "blocked", N: h.n, Values: valuesOf(h.hits), Blocked: true}
+	record.Actions = privacyengine.BlockedRecordActions(record, h.hits)
+	maskrec.Add(record)
 }
 
 func valuesOf(hits []gwmw.Hit) []maskrec.Value {

@@ -20,9 +20,9 @@ import (
 	"github.com/yetone/magpie/internal/claudetui"
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/netproxy"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/proc"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"golang.org/x/text/unicode/norm"
 )
 

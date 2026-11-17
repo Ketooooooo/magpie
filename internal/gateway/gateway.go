@@ -16,7 +16,6 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strconv"
@@ -38,8 +37,9 @@ import (
 	"github.com/yetone/magpie/internal/lazyre"
 	"github.com/yetone/magpie/internal/plugin"
 	"github.com/yetone/magpie/internal/pluginrt"
+	"github.com/yetone/magpie/internal/privacyengine"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"
 )
@@ -533,7 +533,8 @@ type Server struct {
 	refusedThinking map[string]bool
 	subscription    *subscriptionBridge
 	// imageStore is the image MCP server's jobs and images (image_mcp.go)
-	imageStore imageMCPStore
+	imageStore   imageMCPStore
+	privacyTasks privacyengine.Tasks
 	// browser is the Magpie Browser extensions connected (browser.go)
 	browser      browserRelay
 	debug        bool
@@ -625,7 +626,7 @@ type Server struct {
 
 // New makes a gateway.
 func New() *Server {
-	redact.SetKeyPath(filepath.Join(settings.Dir(), "redact.key"))
+	privacyengine.InitBuiltin()
 	s := &Server{
 		// a request counted against a MaxRPM waits for room in its minute
 		// first (rpm.go); the ChatGPT backend is spoken to over HTTP/1.1
@@ -845,13 +846,14 @@ func (s *Server) ListenAndServe(ctx context.Context) error {
 	defer stopTools()
 	// and a request masking is wanted for, with no masker served, turns
 	// plugins/redact on as it is sent rather than being refused until
-	// KeepFresh's next look (gwmw.Served)
-	stopMasking := gwmw.Refresh(func() {
+	// KeepFresh's next look
+	refreshPlugins := func() {
 		if _, err := pluginrt.Refresh(); err != nil {
 			log.Printf("plugins: %v", err)
 		}
-	})
-	defer stopMasking()
+	}
+	defer gwmw.Refresh(refreshPlugins)()
+	defer privacyengine.RefreshBuiltin(refreshPlugins)()
 	// as does a request of a gateway key held to a limit for plugins/budget
 	// (gwbudget.Limiting)
 	stopLimits := gwbudget.Refresh(func() {
@@ -2390,7 +2392,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	start := time.Now()
 	r, err := pinPrivacySettings(r)
 	if err != nil {
-		writeError(w, from, http.StatusServiceUnavailable, gwmw.ErrUnmasked.Error())
+		writeError(w, from, http.StatusServiceUnavailable, privacyengine.ErrUnprotected.Error())
 		return
 	}
 	// a client's "off" is magpie's none, for every route and check below
@@ -2754,7 +2756,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// masked by the magpie that passed it on, by the same
 			// settings: it goes on as it came, that magpie puts its
 			// values back, and a further magpie is told so too
-			r = withMaskedAs(r, fp)
+			r = markModelPrivacy(withMaskedAs(r, fp))
 		} else {
 			notice := isAgentTurn(r)
 			rw, b, done, hits, err := redactedReply(maskedFor(r.Context(), p, model, isGroup, ms), capture.ResponseWriter, body, notice)
@@ -2778,9 +2780,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				move(to, movedPrivacy)
 			} else {
 				capture.ResponseWriter, body, unmask, maskedHits = rw, b, done, hits
+				if hits.engine != "" {
+					r = markModelPrivacy(r)
+				}
 				r = withMaskedAs(r, ownMaskedAs(r.Context()))
 			}
 		}
+	}
+	if sentWhole {
+		r = markModelPrivacy(r)
 	}
 	if sentWhole && capture.omitBody {
 		beginCapture()
@@ -3912,7 +3920,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		// use it as written (treeMan on Discord). A conversation's values
 		// are masked again on every turn, so once one is, every later
 		// turn is told the same, and its cached prefix holds
-		if maskedHits.n > 0 && notesPlaceholders(c.p, from, attemptBody) {
+		if maskedHits.engine == privacyengine.Builtin && maskedHits.n > 0 && notesPlaceholders(c.p, from, attemptBody) {
 			attemptBody = withPlaceholderNote(from, attemptBody)
 		}
 		if hint := s.antigravityForeseen(c.p, from, attemptBody); !last && hint != "" {
@@ -5654,6 +5662,10 @@ func sinceStart(before, d time.Duration) int64 {
 // attempt sends a request to one provider. call.To stays empty when the
 // provider has no endpoint to send it to.
 func (s *Server) attempt(w http.ResponseWriter, r *http.Request, from provider.Protocol, p provider.Provider, model string, body []byte, call *Call) (int, string) {
+	if err := checkModelPrivacy(r.Context()); err != nil {
+		writeError(w, from, http.StatusServiceUnavailable, err.Error())
+		return http.StatusServiceUnavailable, err.Error()
+	}
 	// the try that answers is the one whose rate estimates the reply's
 	// tokens (live.go), after a fallback another than the first
 	liveOfInflight(inflightOf(r.Context())).routed(p.ID, unprefixed(model))
