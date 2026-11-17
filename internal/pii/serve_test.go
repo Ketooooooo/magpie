@@ -20,6 +20,38 @@ func person(s, e int) redact.Found {
 	return redact.Found{Start: s, End: e, Label: "private_person", Score: float64(float32(0.98))}
 }
 
+func TestPrivacyFilterNegotiatesHelperProtocol(t *testing.T) {
+	for _, mode := range []string{"ok", "protocol2"} {
+		t.Run(mode, func(t *testing.T) {
+			log := fakeInstall(t, mode, false)
+			h, err := startOne(exe("pf-serve"), true, make(chan struct{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer end(h)
+			var wantIDs []string
+			if mode == "protocol2" {
+				wantIDs = []string{"request-id 1", "request-id 2"}
+			}
+			if (h.replies != nil) != (wantIDs != nil) {
+				t.Fatalf("unexpected protocol %d", h.hello.Protocol)
+			}
+			for range 2 {
+				got, err := h.classify([]string{"Hi Alice"})
+				if err != nil || !reflect.DeepEqual(got, [][]redact.Found{{person(3, 8)}}) {
+					t.Fatalf("classify = %v, %v", got, err)
+				}
+			}
+			if ids := fakeLines(t, log, "request-id"); !reflect.DeepEqual(ids, wantIDs) {
+				t.Fatalf("request IDs = %v, want %v", ids, wantIDs)
+			}
+			if device := h.device(); device.Device != "CPU" || device.MS != 7 {
+				t.Fatalf("device after replies without updates = %+v", device)
+			}
+		})
+	}
+}
+
 // Short texts go to pf-serve joined, in one request, and what it finds
 // comes back to each text at that text's own offsets; a text seen before
 // isn't asked about again.
