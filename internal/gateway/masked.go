@@ -36,9 +36,11 @@ var OnMasked func(maskrec.Record)
 // maskHits are what a masker swapped: each value from a gwmw.Teller, and
 // how many places in all.
 type maskHits struct {
-	n    int
-	hits []gwmw.Hit
-	took time.Duration // how long masking took
+	engine     string
+	engineName string
+	n          int
+	hits       []gwmw.Hit
+	took       time.Duration // how long masking took
 	// key is where noteMasked puts the record's key, for the answer's
 	// writer to tell it what it put back once it is done (redactedHits)
 	key *int64
@@ -79,7 +81,7 @@ func noteMaskedUntil(r *http.Request, what string, h maskHits, sent string, rout
 	if h.n == 0 && len(h.hits) == 0 {
 		return nil, func(string, string) {}
 	}
-	rec := maskrec.Record{What: what, Route: route, Provider: prov, Model: model, N: h.n}
+	rec := maskrec.Record{Engine: h.engine, EngineName: h.engineName, What: what, Route: route, Provider: prov, Model: model, N: h.n}
 	if r != nil {
 		rec.Agent, rec.Session = callerOf(r).agent, sessionOf(r.Header)
 	}
@@ -115,7 +117,7 @@ func noteMaskedUntil(r *http.Request, what string, h maskHits, sent string, rout
 // noteBlocked records a request held back for a value the user set to
 // block: what it had, nothing of what it would have sent.
 func noteBlocked(h maskHits) {
-	maskrec.Add(maskrec.Record{What: "blocked", N: h.n, Values: valuesOf(h.hits), Blocked: true})
+	maskrec.Add(maskrec.Record{Engine: h.engine, EngineName: h.engineName, What: "blocked", N: h.n, Values: valuesOf(h.hits), Blocked: true})
 }
 
 func valuesOf(hits []gwmw.Hit) []maskrec.Value {

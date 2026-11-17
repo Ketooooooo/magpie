@@ -68,7 +68,10 @@ function maskLoad(force) {
 const maskSettings = () => prefs || state?.settings || {};
 // on as the masker is (masking.Wanted): your own words mask with neither
 // switch on
-const maskOn = () => { const s = maskSettings(); return !!(s.redact || s.redactPersonal || s.redactWords?.length); };
+const maskOn = () => {
+  const s = maskSettings(), engine = s.privacyEngine || "magpie";
+  return engine !== "none" && (engine !== "magpie" || !!(s.redact || s.redactPersonal || s.redactWords?.length));
+};
 
 function maskPageOpen() {
   if (!providers && !maskProvAsked) {
@@ -138,7 +141,7 @@ function drawMaskCard() {
     if (!maskSettings().redactWords?.length) {
       const set = el("button", "link", t("Settings") + " › " + $("#setTab-privacy").textContent);
       set.type = "button";
-      set.onclick = (e) => openSettingsAt(e, "privacy", "#redactList .row");
+      set.onclick = (e) => openSettingsAt(e, "privacy", "#privacyEngineRow");
       head.append(set);
     }
     head.append(maskOffButton());
@@ -216,6 +219,13 @@ function maskNone() {
 // button opens it there, and says so, rather than leave the page
 // saying off while words still mask
 function maskOffButton() {
+  const engine = maskSettings().privacyEngine;
+  if (engine && engine !== "magpie") {
+    const button = el("button", "text", t("Turn off in Settings"));
+    button.type = "button";
+    button.onclick = (event) => openSettingsAt(event, "privacy", "#privacyEngineRow");
+    return button;
+  }
   const words = maskSettings().redactWords?.length;
   const b = el("button", "text", t(words ? "Turn off in Settings" : "Turn off masking"));
   b.type = "button";
@@ -239,6 +249,7 @@ function maskOffButton() {
 }
 let maskWasPersonal = false;
 function maskTurnOn(e) {
+  if (maskSettings().privacyEngine === "none") return openSettingsAt(e, "privacy", "#privacyEngineRow");
   const b = e.currentTarget;
   b.disabled = true;
   (prefs ? Promise.resolve() : loadSettings())
@@ -580,6 +591,12 @@ function maskKindsOf(r) {
   for (const x of r.values || []) by[x.k] = (by[x.k] || 0) + (x.n || 1);
   return Object.entries(by).sort((x, y) => y[1] - x[1]);
 }
+function maskEngineName(record) {
+  if (record.engineName) return record.engineName;
+  const id = record.engine || "magpie";
+  return maskSettings().privacyEngines?.find((engine) => engine.id === id)?.name || (id === "magpie" ? "Magpie" : id);
+}
+
 function maskRecordRow(r) {
   const row = el("button", "msk-row" + (r.blocked ? " held" : ""));
   row.type = "button";
@@ -590,6 +607,7 @@ function maskRecordRow(r) {
   const kinds = el("span", "msk-kinds");
   if (r.blocked) kinds.append(el("span", "msk-held", t("Held back")));
   else if (r.what && r.what !== "chat") kinds.append(el("span", "msk-what", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
+  kinds.append(el("span", "msk-what", maskEngineName(r)));
   const ranked = maskKindsOf(r);
   for (const [k, n] of ranked.slice(0, 3)) {
     const c = el("span", "msk-kind");
@@ -646,7 +664,7 @@ function maskOneOpen(key, r) {
       if (maskO !== o) return;
       o.r = rec;
       drawMaskOne();
-      const ps = (rec.values || []).map((x) => x.p);
+      const ps = (rec.values || []).filter((x) => x.known).map((x) => x.p);
       const vals = ps.length ? api("masking/values", { ps }).then((x) => {
         for (const [p, v] of Object.entries(x?.values || {})) { o.vals.set(p, v); maskValues.set(p, v); }
       }).catch(() => {}) : null;
@@ -727,6 +745,7 @@ function drawMaskOne() {
   const card = el("section", "msk-req");
   const who = el("div", "msk-who");
   maskRoute(who, r);
+  who.append(el("span", "msk-chip", maskEngineName(r)));
   if (r.model) who.append(el("span", "msk-chip", r.model));
   if (r.what && r.what !== "chat") who.append(el("span", "msk-chip", MASK_WHAT[r.what] ? t(MASK_WHAT[r.what]) : r.what));
   card.append(who, maskSteps(r, o));
@@ -774,8 +793,13 @@ function maskBlocked(r) {
   ic.append(sv("path", { d: "m6 6 4 4M10 6l-4 4" }));
   head.append(ic, el("h2", "", t("This request was not sent")));
   const kinds = [...new Set((r.values || []).filter((x) => x.a === "block").map((x) => x.k))];
+  const labels = kinds.map(maskKindName).join(", ") || t("a value");
+  if (r.engine && r.engine !== "magpie") {
+    box.append(head, el("p", "", t("{engine} blocked this request because it contained {kinds}.", { engine: maskEngineName(r), kinds: labels })));
+    return box;
+  }
   const a = maskWho(r.agent, "agent").name, p = r.provider ? maskWho(r.provider, "provider").name : t("A vendor");
-  box.append(head, el("p", "", t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: kinds.map(maskKindName).join(", ") || t("a value"), provider: p, agent: r.agent ? a : t("The agent") })));
+  box.append(head, el("p", "", t("It carried {kinds}, which you set to hold back, so magpie didn't send it to {provider}. {agent} got an error saying why.", { kinds: labels, provider: p, agent: r.agent ? a : t("The agent") })));
   const tools = el("div", "msk-btools");
   if (kinds.length) {
     const b = el("button", "text primary", t("Mask it instead"));

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/access"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -57,6 +58,16 @@ func TestKeyRedactSetting(t *testing.T) {
 	// was masked, so the remote masks by its own settings
 	if got := send(secrets[0], "office/fake/m1"); strings.Contains(got, "acmecorp") {
 		t.Errorf("an off key's request told the remote it was masked: %s", got)
+	}
+
+	if err := privacyengine.Select(t.Context(), privacyengine.Disabled); err != nil {
+		t.Fatal(err)
+	}
+	if got := send(secrets[1], "fake/m1"); strings.Contains(got, "acmecorp") {
+		t.Error("None bypassed a gateway key that requires masking")
+	}
+	if got := send(secrets[2], "fake/m1"); !strings.Contains(got, "acmecorp") {
+		t.Error("a follow-settings key was masked with None selected")
 	}
 
 	// the settings mask nothing: off and follow send as written, on masks

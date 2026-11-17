@@ -88,6 +88,13 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var err error
+	if r.Method == http.MethodPost && (rest == "/responses" || rest == "/responses/compact") {
+		r, err = pinPrivacySettings(r)
+		if err != nil {
+			writeError(w, provider.Responses, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+	}
 	switch {
 	case r.Method == http.MethodGet && rest == "/models":
 		s.codexModels(w, r)
@@ -334,7 +341,7 @@ func (s *Server) codexBackend(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPost && rest == "/responses" {
 		withGatewaySession(w, r)
 		var recorded, hooked func()
-		w, recorded = recordConversation(w, r, provider.Responses, body)
+		w, r, recorded = recordConversation(w, r, provider.Responses, body)
 		defer recorded()
 		// and the tool loop it may be stuck in spends that sign-in's
 		// allowance as it would a magpie model's
@@ -1027,6 +1034,9 @@ func (s *Server) codexUpstreamOn(w http.ResponseWriter, r *http.Request, rest st
 	// (codexFallBack masks for its own route), gets the turn as written
 	// (isee1_1 on Discord); Codex's own API key is no account of magpie's
 	sentWhole := base == provider.CodexBase && codexRouteUnmasked(on)
+	if recorder := pendingConversation(r); sentWhole && recorder != nil && !s.codexFallsBack(r, body) {
+		recorder.enableRecording()
+	}
 	if r.Method == http.MethodPost && !sentWhole {
 		var unmask func()
 		var err error

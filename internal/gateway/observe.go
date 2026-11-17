@@ -132,7 +132,7 @@ func (o *observed) attempt(call Call, attempt Try, providerID, effort string, he
 		Input: u.Input, Output: u.Output, CacheRead: u.CacheRead, CacheWrite: u.CacheWrite, CacheUnknown: u.cacheNotCounted(), Reasoning: u.Reasoning,
 		Millis: time.Since(attempt.Start).Milliseconds(), Status: attempt.Status, TTFT: attempt.TTFT, FirstText: attempt.FirstText, FirstReasoning: attempt.FirstReasoning, ReasoningHidden: attempt.ReasoningHidden, CallerKeyName: o.keyName}
 	canceledAs(&rec, attempt.Status, attempt.Error)
-	if wanted := usage.ObservedBodies(); wanted != usage.NoBodies {
+	if wanted := usage.ObservedBodies(); wanted != usage.NoBodies && !capture.omitBody {
 		reply, cut := capture.body.text(), capture.body.truncated
 		if !held.passing {
 			data := held.held.Bytes()

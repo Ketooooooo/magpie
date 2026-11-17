@@ -144,6 +144,20 @@ function checkFetch(record) {
   record.controller.signal.throwIfAborted()
 }
 
+// Send only as much as the reader has credited, then wait before pulling more.
+async function sendChunks(id, record, bytes) {
+  for (let offset = 0; offset < bytes.length;) {
+    const n = await record.gate.take(Math.min(MAX_FRAME, bytes.length - offset))
+    checkFetch(record)
+    if (n <= 0) return
+    const data = bytes.subarray(offset, offset + n).toString("base64")
+    record.gate.spend(n + FRAME_OVERHEAD)
+    await sendForFetch(record, chunkLine(id, data))
+    checkFetch(record)
+    offset += n
+  }
+}
+
 async function sendForFetch(record, msg) {
   if (record.state === "cancelled" || record.state === "finished") return
   const ctl = record.controller
@@ -3464,7 +3478,7 @@ async function staleAccess(key, before) {
 }
 
 async function fetchAs(id, record, key, params) {
-  const { controller: ctl, gate } = record
+  const { controller: ctl } = record
   const { provider, model, npm, url, method, headers, body, session } = params
   // the sign-in as the request found it, before its loader or magpie
   // renewed it: a 401 is judged against it (staleAccess)
@@ -3542,18 +3556,7 @@ async function fetchAs(id, record, key, params) {
         checkFetch(record)
         // a chunk the stream handed over is this reader's: viewed, not copied
         const bytes = Buffer.isBuffer(chunk) ? chunk : ArrayBuffer.isView(chunk) ? Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength) : Buffer.from(chunk)
-        for (let off = 0; off < bytes.length; ) {
-          // one frame at a time, no more than the reader has credited: a
-          // reader that stopped leaves the upstream paused here
-          const n = await gate.take(Math.min(MAX_FRAME, bytes.length - off))
-          checkFetch(record)
-          if (n <= 0) break
-          const data = bytes.subarray(off, off + n).toString("base64")
-          gate.spend(n + FRAME_OVERHEAD)
-          await sendForFetch(record, chunkLine(id, data))
-          checkFetch(record)
-          off += n
-        }
+        await sendChunks(id, record, bytes)
       }
     }
     checkFetch(record)
@@ -3573,6 +3576,12 @@ async function fetchAs(id, record, key, params) {
 // ---- the loop ----------------------------------------------------------------
 
 const handlers = {
+  async privacyPreview(p, signal) {
+    const entry = await import(pathToFileURL(p.entry).href)
+    if (typeof entry.preview !== "function") throw new Error("Privacy plugin exports no preview function")
+    signal.throwIfAborted()
+    return entry.preview(p.input, { directory: p.directory, signal })
+  },
   gatewayStates() {
     return Object.fromEntries(gatewayHooks.map(({ spec, state }) => [spec, {
       calls: state.calls, failures: state.failures,
@@ -3731,6 +3740,19 @@ const gatewayInflight = new Map() // RPC id -> AbortController
 const signInSteps = new Set(["authorize", "callback", "apiKey", "importFiles"])
 const signInInflight = new Map() // RPC id -> AbortController
 const rpcInflight = new Map() // an ordinary RPC's id -> its AbortController (#4678)
+const privacyStreams = new Map()
+
+async function privacyOutput(id, record, value) {
+  await sendChunks(id, record, Buffer.from(JSON.stringify(value) + "\n"))
+}
+
+function closePrivacy(id, record) {
+  privacyStreams.delete(id)
+  inflight.delete(id)
+  transitionFetch(record, "cancelled")
+  done()
+}
+
 const rl = readline.createInterface({ input: process.stdin, terminal: false })
 rl.on("line", (line) => {
   if (!line.trim()) return
@@ -3743,7 +3765,8 @@ rl.on("line", (line) => {
   if (msg.method === "abort") {
     const id = msg.params?.id
     const record = inflight.get(id)
-    if (record) transitionFetch(record, "cancelled")
+    if (privacyStreams.has(id)) closePrivacy(id, record)
+    else if (record) transitionFetch(record, "cancelled")
     gatewayInflight.get(id)?.abort()
     signInInflight.get(id)?.abort()
     rpcInflight.get(id)?.abort()
@@ -3754,7 +3777,41 @@ rl.on("line", (line) => {
     if (record?.state === "streaming") record.gate.add(msg.params?.n ?? 0)
     return
   }
+  if (msg.method === "privacyReply") {
+    const { id, chunk } = msg.params
+    const record = privacyStreams.get(id)
+    if (record?.session) {
+      // The reader sends another batch only after consuming this result.
+      Promise.resolve().then(() => privacyOutput(id, record, record.session.reply(chunk)))
+        .catch(async () => {
+          if (!privacyStreams.has(id)) return
+          await sendForFetch(record, { id, error: { message: "The privacy engine could not restore the reply" } })
+          if (privacyStreams.has(id)) closePrivacy(id, record)
+        })
+    }
+    return
+  }
   pending++
+  if (msg.method === "privacyBegin") {
+    const id = msg.id
+    const p = msg.params
+    const record = { state: "setup", controller: new AbortController(), gate: makeGate(p.window) }
+    inflight.set(id, record)
+    privacyStreams.set(id, record)
+    waitForReady(record).then(async () => {
+      const entry = await import(pathToFileURL(p.entry).href)
+      checkFetch(record)
+      record.session = await entry.begin(p.input, { directory: p.directory, signal: record.controller.signal })
+      checkFetch(record)
+      transitionFetch(record, "streaming")
+      await privacyOutput(id, record, record.session.request())
+    }).catch(async () => {
+      if (!privacyStreams.has(id)) return
+      await sendForFetch(record, { id, error: { message: "The privacy engine could not protect the request" } })
+      if (privacyStreams.has(id)) closePrivacy(id, record)
+    })
+    return
+  }
   if (msg.method === "init") {
     setReady(handlers.init(msg.params ?? {}))
     ready.then(
@@ -3858,5 +3915,6 @@ rl.on("line", (line) => {
 })
 rl.on("close", () => {
   closed = true
+  for (const [id, record] of privacyStreams) closePrivacy(id, record)
   if (pending === 0) process.exit(0)
 })

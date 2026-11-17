@@ -2388,6 +2388,11 @@ func estimate(req *Request) int {
 // serve routes one parsed-enough request to its provider.
 func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
 	start := time.Now()
+	r, err := pinPrivacySettings(r)
+	if err != nil {
+		writeError(w, from, http.StatusServiceUnavailable, gwmw.ErrUnmasked.Error())
+		return
+	}
 	// a client's "off" is magpie's none, for every route and check below
 	// that reads the body's effort (plugins#334)
 	body = offAsNone(from, body)
@@ -2424,10 +2429,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 		unmask()
 		named()
 	}()
-	// an observer may want the bodies uncut (the OTLP export, #538): the
-	// request is already whole in memory, so keep it as it came, and the
-	// reply goes to a spool as it streams
-	wholeBodies := usage.ObservedBodies() == usage.WholeBodies
 	// a model asked for at an effort of its own (a Claude Code tier, #536)
 	// is the model, every try of it asked for that effort
 	asked, askedEffort := askedAt(askedFor)
@@ -2442,10 +2443,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// (factsOf), where each read parsed the whole conversation again,
 	// ~27 MB a time for a 4 MB Codex request (XiaoYin_OK on X)
 	holdBody(r.Context(), plain)
-	capture := &captureResponseWriter{ResponseWriter: w}
-	if wholeBodies {
-		capture.whole = &spool{limit: wholeBodyLimit, pattern: "magpie-whole-*"}
-	}
+	capture := &captureResponseWriter{ResponseWriter: w, omitBody: !nativePrivacyCapture(r.Context())}
 	w = capture
 	// the agent it is recorded as, the one on the computer it was passed
 	// on from for a remote magpie's request; agent the one that sent it,
@@ -2454,7 +2452,17 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	metadata := requestSessionMetadata(r.Header, body)
 	var clientResponseID string // only a reply released to the client owns this ID
 	call := Call{Time: start, From: from, Model: unprefixed(modelOf(body)), Agent: who.agent, Via: who.via, Kind: requestCallKind(r.Header, metadata),
-		wire: archiving(r, capture, start, nil), headers: headerLogOf(r.Context())}
+		headers: headerLogOf(r.Context())}
+	beginCapture := func() {
+		capture.omitBody = false
+		call.wire = archiving(r, capture, start, nil)
+		if usage.ObservedBodies() == usage.WholeBodies {
+			capture.whole = &spool{limit: wholeBodyLimit, pattern: "magpie-whole-*"}
+		}
+	}
+	if !capture.omitBody {
+		beginCapture()
+	}
 	// an agent compacting its conversation is recorded as the compaction
 	// it is, as Codex's are by their header: Claude Code's compaction is a
 	// call its transcript never records (skipTranscript), so this row is
@@ -2476,13 +2484,26 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// the log has the body as it went: masked, or as written where it
 	// went so
 	logBody := func(b []byte) {
+		if capture.omitBody {
+			return
+		}
 		call.RequestBody, call.RequestTruncated = captureRequestBody(b)
-		if wholeBodies {
+		if capture.whole != nil {
 			call.wholeIn = b
 		}
 		if call.wire != nil {
 			call.wire.body = b
 		}
+	}
+	logAttemptBody := func(rec *usage.Record, reply []byte) {
+		if capture.omitBody {
+			return
+		}
+		bodies := &Call{RequestBody: call.RequestBody, RequestTruncated: call.RequestTruncated, ResponseBody: string(reply), maskIn: call.maskIn}
+		if call.wholeIn != nil {
+			bodies.wholeIn, bodies.wholeOut = call.wholeIn, reply
+		}
+		withBodies(rec, bodies)
 	}
 	defer discardArchive(capture)
 	r, watched := observeRequest(r, call.Kind, body)
@@ -2523,7 +2544,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	// a request turned away before any provider was asked is in the log
 	// as the failure it was, with the reason
 	turnedAway := func() {
-		if !maskDone {
+		if !maskDone && !capture.omitBody {
 			// sent nowhere: the log has it masked, or not at all
 			logBody(maskedCopy(r.Context(), body))
 		}
@@ -2735,7 +2756,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			// values back, and a further magpie is told so too
 			r = withMaskedAs(r, fp)
 		} else {
-			rw, b, done, hits, err := redactedHits(maskedFor(r.Context(), p, model, isGroup, ms), capture.ResponseWriter, body)
+			notice := isAgentTurn(r)
+			rw, b, done, hits, err := redactedReply(maskedFor(r.Context(), p, model, isGroup, ms), capture.ResponseWriter, body, notice)
 			if err != nil { // fails closed: never sent unmasked
 				log.Printf("gateway: %v", err)
 				call.Status, call.Error = maskStatus(err), err.Error()
@@ -2760,11 +2782,26 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			}
 		}
 	}
+	if sentWhole && capture.omitBody {
+		beginCapture()
+		if isAgentTurn(r) {
+			if recorder := pendingConversation(r); recorder != nil {
+				recorder.enableRecording()
+			}
+		}
+	}
 	if sentWhole && usage.ObservedBodies() != usage.NoBodies {
 		call.maskIn = &laterMasked{ctx: context.WithoutCancel(r.Context()), plain: body}
 	}
 	maskDone = true
-	logBody(body)
+	if capture.omitBody && !sentWhole && maskedHits.engine != "" {
+		// The engine already protected this body. Keep it without opening
+		// any reply or retry capture, which can contain restored values.
+		call.RequestBody, call.RequestTruncated = captureRequestBody(redact.ScrubJSON(body))
+		call.wire = archiving(r, capture, start, body)
+	} else {
+		logBody(body)
+	}
 	// a routing group held to some accounts holds the request to them
 	// from here on, as a gateway key's accounts do
 	if isGroup {
@@ -3442,7 +3479,12 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 	}
 	// the card's text is the masked body, even where the request went
 	// unmasked: masked by PromptText when it went whole (#3973)
-	promptRead := s.inspectPrompt(tr, from, body, body, sentWhole)
+	promptRead := func() *Prompt { return nil }
+	// An external engine's protected request is safe to inspect. A provider
+	// exempt from masking can still receive the original; do not retain it.
+	if nativePrivacyCapture(r.Context()) || (!sentWhole && maskedHits.engine != "") {
+		promptRead = s.inspectPrompt(tr, from, body, body, sentWhole)
+	}
 	var lastTried provider.Provider // the last try's, for its model's context window and the usage's endpoint
 	var skipped []string
 	sent := ""       // the reasoning the last try's model was asked for
@@ -4421,11 +4463,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				TTFT: try.TTFT, FirstText: try.FirstText, FirstReasoning: try.FirstReasoning, ReasoningHidden: try.ReasoningHidden, Flow: try.Flow, Session: sessionOf(r.Header), NativeSession: nativeSessionOf(r.Header), Kind: call.Kind,
 				RequestID: call.Usage.RequestID, Endpoint: endpointOf(r, from, call.To, c.p, c.model), Archive: call.archiveName(), HandedOn: true}
 			failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
-			failed := &Call{RequestBody: call.RequestBody, RequestTruncated: call.RequestTruncated, ResponseBody: string(hw.errBody()), maskIn: call.maskIn}
-			if call.wholeIn != nil {
-				failed.wholeIn, failed.wholeOut = call.wholeIn, hw.errBody()
-			}
-			withBodies(&rec, failed)
+			logAttemptBody(&rec, hw.errBody())
 			appendUsage(r, rec)
 		}
 		sentMs, ownMs, retriedMs, queuedMs = 0, 0, 0, 0
@@ -4668,11 +4706,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 				// what this account answered is its refusal, the reply
 				// captured so far being no one's yet
-				refusal := &Call{RequestBody: call.RequestBody, RequestTruncated: call.RequestTruncated, ResponseBody: string(hw.errBody()), maskIn: call.maskIn}
-				if call.wholeIn != nil {
-					refusal.wholeIn, refusal.wholeOut = call.wholeIn, hw.errBody()
-				}
-				withBodies(&rec, refusal)
+				logAttemptBody(&rec, hw.errBody())
 				appendUsage(r, rec)
 			}
 			failedRow = nil // its row is written
@@ -4713,11 +4747,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 				failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
 				// what this account answered is its refusal, the reply
 				// captured so far being no one's yet
-				refusal := &Call{RequestBody: call.RequestBody, RequestTruncated: call.RequestTruncated, ResponseBody: string(hw.errBody()), maskIn: call.maskIn}
-				if call.wholeIn != nil {
-					refusal.wholeIn, refusal.wholeOut = call.wholeIn, hw.errBody()
-				}
-				withBodies(&rec, refusal)
+				logAttemptBody(&rec, hw.errBody())
 				appendUsage(r, rec)
 			}
 			failedRow = nil // its row is written
@@ -5595,7 +5625,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request, from provider.Pro
 			rec.DownBytes, rec.ImageFilesSaved, rec.ImageFiles = up.downOf(), up.saved, up.images
 		}
 		failedWith(&rec, call.Status, call.Error, call.Usage.ErrType)
-		withBodies(&rec, &call)
+		if !capture.omitBody {
+			withBodies(&rec, &call)
+		}
 		appendUsage(r, rec)
 		if call.Status < 400 {
 			// what its model searched with its provider's own tool
