@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/agentenv"
-	"github.com/yetone/magpie/internal/redact"
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/settings"
 )
 

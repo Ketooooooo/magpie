@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -77,7 +78,7 @@ func TestMaskingModelWaitNotCutOffAtMost(t *testing.T) {
 	withoutMasker(t)
 	m := waitingMasker{let: make(chan struct{}), left: make(chan struct{})}
 	t.Cleanup(func() { close(m.let) })
-	remove := gwmw.Mask(m)
+	remove := privacyengine.RegisterBuiltinForTest(m)
 	t.Cleanup(remove)
 
 	s := New()

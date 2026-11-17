@@ -407,7 +407,7 @@ func TestGatewayHookCallerCancellation(t *testing.T) {
 	}
 	// The canceled RPC releases its capacity; another RPC can still finish.
 	var out any
-	if err := Call(t.Context(), "providers", map[string]any{}, &out); err != nil {
+	if err := callHost(t.Context(), "providers", map[string]any{}, &out); err != nil {
 		t.Fatal(err)
 	}
 }

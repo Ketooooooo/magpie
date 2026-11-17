@@ -23,8 +23,8 @@ import (
 	"sync"
 	"time"
 
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 )
 
 // headerTriesMost is how many upstream requests a call keeps the headers

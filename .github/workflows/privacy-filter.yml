@@ -1,7 +1,7 @@
 # Builds pf-serve, the program that runs Settings → Privacy's local
-# masking model (native/privacy-filter, internal/pii), for each system.
+# masking model (native/privacy-filter, internal/privacyengine/internal/pii), for each system.
 # A change to it is built on every push; a pf-v* tag publishes the zips as
-# a prerelease of this repo, never Latest, whose sha256s internal/pii pins.
+# a prerelease of this repo, never Latest, whose sha256s internal/privacyengine/internal/pii pins.
 name: privacy-filter
 
 on:
@@ -74,5 +74,5 @@ jobs:
           sha256sum pf-serve-*.zip | tee SHA256SUMS
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease --latest=false \
             --title "pf-serve $GITHUB_REF_NAME" \
-            --notes "pf-serve, which runs the local masking model of Settings → Privacy (native/privacy-filter). Not a magpie release: magpie downloads these itself, checked against the sha256s in internal/pii." \
+            --notes "pf-serve, which runs the local masking model of Settings → Privacy (native/privacy-filter). Not a magpie release: magpie downloads these itself, checked against the sha256s in internal/privacyengine/internal/pii." \
             pf-serve-*.zip SHA256SUMS

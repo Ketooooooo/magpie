@@ -16,7 +16,6 @@ import (
 	"github.com/yetone/magpie/internal/access"
 	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/lazyre"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/maskrec"
 	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
@@ -31,17 +30,14 @@ import (
 // request with no key follows the settings. Every place that masks what
 // goes to a vendor asks here. Fail closed: a forced pass needs a masker
 // that reads ctx, and one that doesn't is an error.
-func maskingFor(ctx context.Context) (context.Context, gwmw.Masker, error) {
+func maskingFor(ctx context.Context) (*privacyengine.Session, error) {
 	mode := access.Caller(ctx).Redact
 	if mode == access.RedactOff {
-		return ctx, nil, nil
+		return nil, nil
 	}
 	st, err := requestPrivacySettings(ctx)
 	if err != nil {
-		return ctx, nil, gwmw.ErrUnmasked
-	}
-	if _, pinned := ctx.Value(privacySettingsKey{}).(settings.Settings); !pinned {
-		ctx = context.WithValue(ctx, privacySettingsKey{}, st)
+		return nil, privacyengine.ErrUnprotected
 	}
 	return privacyengine.Begin(ctx, st, mode == access.RedactOn)
 }
@@ -86,6 +82,23 @@ func requestPrivacyEngine(ctx context.Context) string {
 	return privacyengine.RequestID(st, mode == access.RedactOn)
 }
 
+type modelPrivacyKey struct{}
+
+func markModelPrivacy(r *http.Request) *http.Request {
+	return r.WithContext(context.WithValue(r.Context(), modelPrivacyKey{}, true))
+}
+
+// checkModelPrivacy detects a missing privacy step on the common model
+// attempt, including fallbacks and provider plugins. The context marker
+// records that the step ran or that routing allowed an exemption. It
+// does not validate the body after later rewrites.
+func checkModelPrivacy(ctx context.Context) error {
+	if ready, _ := ctx.Value(modelPrivacyKey{}).(bool); !ready && redactionWantedFor(ctx) {
+		return errors.New("This model request did not complete privacy protection; nothing was sent")
+	}
+	return nil
+}
+
 // redacted masks a request's secrets, as the settings say, before it goes
 // to a vendor, and wraps w so what the vendor answers has them back; done
 // writes what the wrapper still holds. Nothing masked, nothing wrapped. It
@@ -104,73 +117,49 @@ func redactedHits(ctx context.Context, w http.ResponseWriter, body []byte) (http
 }
 
 func redactedReply(ctx context.Context, w http.ResponseWriter, body []byte, notice bool) (http.ResponseWriter, []byte, func(), maskHits, error) {
-	ctx, m, err := maskingFor(ctx)
+	m, err := maskingFor(ctx)
 	if m == nil {
 		return w, body, func() {}, maskHits{}, err
 	}
-	type out struct {
-		b []byte
-		h maskHits
-	}
 	began := time.Now()
 	defer noteRedacting(ctx)()
-	o, err := gwmw.Safely(func() out {
-		if t, ok := m.(gwmw.ContextTeller); ok {
-			b, hits := t.JSONHitsContext(ctx, body)
-			return out{b, hitsOf(hits)}
-		}
-		if t, ok := m.(gwmw.Teller); ok {
-			b, hits := t.JSONHits(body)
-			return out{b, hitsOf(hits)}
-		}
-		b, n := m.JSON(body)
-		return out{b, maskHits{n: n}}
-	})
+	result, err := m.ProtectJSON(body)
 	if err != nil {
-		closeMasker(m)
+		m.Close()
 		return w, body, func() {}, maskHits{}, err
 	}
-	labelMaskHits(ctx, m, began, &o.h)
-	if err := blocked(o.h); err != nil {
-		closeMasker(m)
+	h := hitsOf(result.Hits)
+	h.n += result.Count
+	labelMaskHits(m, began, &h)
+	if err := blocked(h); err != nil {
+		m.Close()
 		return w, body, func() {}, maskHits{}, err
 	}
-	if o.h.n == 0 && o.h.engine == privacyengine.Builtin { // built-in allow-only hits don't rewrite the request
-		o.b = body
+	if h.n == 0 && m.Engine().Builtin { // allow-only hits leave the body as it came
+		result.Body = body
 	}
-	// Put back even if this request masked nothing: a vendor may hold
-	// placeholders from an earlier turn in its own conversation state.
-	writer := m.Writer
-	if presenter, ok := m.(interface {
-		WriterWithNotice(http.ResponseWriter) (http.ResponseWriter, func())
-	}); ok && notice {
-		writer = presenter.WriterWithNotice
-	}
-	rw, done := writer(w)
-	done = toldBack(rw, done, &o.h)
-	return rw, o.b, done, o.h, nil
+	rw, done := replyWithPrivacy(w, m, notice, &h)
+	return rw, result.Body, done, h, nil
 }
 
-func labelMaskHits(ctx context.Context, m gwmw.Masker, began time.Time, h *maskHits) {
+func labelMaskHits(m *privacyengine.Session, began time.Time, h *maskHits) {
 	h.took = time.Since(began)
-	h.engine = requestPrivacyEngine(ctx)
-	if named, ok := m.(interface{ PrivacyName() string }); ok {
-		h.engineName = named.PrivacyName()
+	h.engine = m.Engine().ID
+	if !m.Engine().Builtin {
+		h.engineName = m.Engine().Name
 	}
 }
 
-// toldBack is done, which then tells the request's record what rw put
-// back in the answer, where rw counts it and the request was recorded.
-func toldBack(rw http.ResponseWriter, done func(), h *maskHits) func() {
-	c, ok := rw.(interface{ Put() map[string]int })
-	if !ok {
-		return done
+func replyWithPrivacy(w http.ResponseWriter, m *privacyengine.Session, notice bool, h *maskHits) (http.ResponseWriter, func()) {
+	rw, done, put := m.WrapReply(w, notice)
+	if put == nil {
+		return rw, done
 	}
 	key := new(int64)
 	h.key = key
-	return func() {
+	return rw, func() {
 		done()
-		maskrec.Restored(*key, c.Put())
+		maskrec.Restored(*key, put())
 	}
 }
 
@@ -191,8 +180,7 @@ func redactedPromptHits(ctx context.Context, w http.ResponseWriter, prompt strin
 	if h.n == 0 {
 		masked = prompt
 	}
-	rw, done := m.Writer(w)
-	done = toldBack(rw, done, &h)
+	rw, done := replyWithPrivacy(w, m, false, &h)
 	return rw, masked, done, h, nil
 }
 
@@ -200,79 +188,41 @@ func redactedPromptHits(ctx context.Context, w http.ResponseWriter, prompt strin
 // swapped; an error when it can't be (fail closed).
 func maskedText(ctx context.Context, s string) (string, int, error) {
 	m, masked, h, err := maskTextHits(ctx, s)
-	closeMasker(m)
+	m.Close()
 	return masked, h.n, err
 }
 
 // maskTextHits is maskedText with the masker that masked it and what it
 // swapped. Its wait for the local model ends with ctx, as redactedHits'
 // does.
-func maskTextHits(ctx context.Context, s string) (gwmw.Masker, string, maskHits, error) {
+func maskTextHits(ctx context.Context, s string) (*privacyengine.Session, string, maskHits, error) {
 	texts := []string{s}
 	m, h, err := maskTexts(ctx, texts)
 	return m, texts[0], h, err
 }
 
-func closeMasker(m gwmw.Masker) {
-	if closer, ok := m.(interface{ Close() }); ok {
-		closer.Close()
-	}
-}
-
 // maskTexts protects strings from one request and retains the reply session.
 // Callers that only use the protected input close the session immediately.
-func maskTexts(ctx context.Context, texts []string) (gwmw.Masker, maskHits, error) {
-	ctx, m, err := maskingFor(ctx)
+func maskTexts(ctx context.Context, texts []string) (*privacyengine.Session, maskHits, error) {
+	m, err := maskingFor(ctx)
 	if m == nil || len(texts) == 0 {
 		return m, maskHits{}, err
 	}
 	began := time.Now()
 	defer noteRedacting(ctx)()
-	var h maskHits
-	labelMaskHits(ctx, m, began, &h)
-	block, err := gwmw.Safely(func() error {
-		if batch, ok := m.(interface {
-			TextsHitsContext(context.Context, []string) ([]string, []gwmw.Hit)
-		}); ok {
-			masked, hits := batch.TextsHitsContext(ctx, texts)
-			h.add(hitsOf(hits))
-			h.took = time.Since(began)
-			copy(texts, masked)
-			return blocked(h)
-		}
-		for i, s := range texts {
-			if s == "" {
-				continue
-			}
-			var masked string
-			var hits maskHits
-			if t, ok := m.(gwmw.ContextTeller); ok {
-				text, found := t.TextHitsContext(ctx, s)
-				masked, hits = text, hitsOf(found)
-			} else if t, ok := m.(gwmw.Teller); ok {
-				text, found := t.TextHits(s)
-				masked, hits = text, hitsOf(found)
-			} else {
-				masked, hits.n = m.Text(s)
-			}
-			h.took = time.Since(began)
-			hits.engine, hits.engineName = h.engine, h.engineName
-			if err := blocked(hits); err != nil {
-				return err
-			}
-			h.add(hits)
-			texts[i] = masked
-		}
-		return nil
-	})
+	result, err := m.ProtectTexts(texts)
 	if err != nil {
-		closeMasker(m)
+		m.Close()
 		return nil, maskHits{}, err
 	}
-	if block != nil {
-		closeMasker(m)
-		return nil, maskHits{}, block
+	h := hitsOf(result.Hits)
+	h.n += result.Count
+	labelMaskHits(m, began, &h)
+	if err := blocked(h); err != nil {
+		m.Close()
+		return nil, maskHits{}, err
 	}
+	copy(texts, result.Body)
 	return m, h, nil
 }
 
@@ -291,8 +241,7 @@ func redactedStrings(ctx context.Context, w http.ResponseWriter, fields any) (ht
 	for i, s := range texts {
 		setters[i](s)
 	}
-	rw, done := m.Writer(w)
-	done = toldBack(rw, done, &h)
+	rw, done := replyWithPrivacy(w, m, false, &h)
 	return rw, done, h, nil
 }
 
@@ -370,24 +319,6 @@ func maskStatus(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusServiceUnavailable
-}
-
-// restored is s with what a masker masked before put back; s when none
-// serves.
-func restored(s string, escaped bool) string {
-	if m, ok := gwmw.Served(); ok {
-		return m.Restore(s, escaped)
-	}
-	return s
-}
-
-// restoring wraps w so values masked before come back, when a masker
-// serves.
-func restoring(w http.ResponseWriter) (http.ResponseWriter, func()) {
-	if m, ok := gwmw.Served(); ok {
-		return m.Writer(w)
-	}
-	return w, func() {}
 }
 
 // maskedAsKey holds, on a request masked here or by the magpie that
@@ -494,7 +425,7 @@ func ownMaskedAs(ctx context.Context) string {
 	if err != nil || privacyengine.ID(st) != privacyengine.Builtin {
 		return ""
 	}
-	fp := masking.Fingerprint(st)
+	fp := privacyengine.BuiltinFingerprint(st)
 	if fp == "" {
 		return ""
 	}
@@ -523,12 +454,20 @@ func redactionWantedFor(ctx context.Context) bool {
 // its query from a request already masked, but an agent's call to the
 // search MCP carries it as the agent's model wrote it, values put back
 // (lc on Discord). It fails closed as redacted does.
-func maskedQuery(ctx context.Context, query string, p *provider.Provider) (string, error) {
+// finishSearchPrivacy restores only a direct MCP answer. Search results
+// used inside a model turn still carry the protected query.
+func finishSearchPrivacy(ctx context.Context, session *privacyengine.Session, answer *string, err *error) {
+	defer session.Close()
+	if call, _ := ctx.Value(searchForKey{}).(*CallFor); *err == nil && call != nil && call.MCP {
+		*answer = session.RestoreText(*answer)
+	}
+}
+
+func maskedQuery(ctx context.Context, query string, p *provider.Provider) (string, *privacyengine.Session, error) {
 	if p != nil && p.SkipsRedaction() {
-		return query, nil
+		return query, nil, nil
 	}
 	m, masked, h, err := maskTextHits(ctx, query)
-	closeMasker(m)
 	if err == nil {
 		id := ""
 		if p != nil {
@@ -536,7 +475,7 @@ func maskedQuery(ctx context.Context, query string, p *provider.Provider) (strin
 		}
 		noteMasked(nil, "search", h, masked, 0, id, "")
 	}
-	return masked, err
+	return masked, m, err
 }
 
 // maskedCopy applies the built-in diagnostics policy to a recorded body.
@@ -546,28 +485,7 @@ func maskedCopy(ctx context.Context, body []byte) []byte {
 	if err != nil {
 		return nil
 	}
-	if privacyengine.ID(st) != privacyengine.Disabled {
-		st.PrivacyEngine = privacyengine.Builtin
-	}
-	ctx, m, err := privacyengine.Begin(ctx, st, false)
-	if err != nil {
-		return nil
-	}
-	if m == nil {
-		return body
-	}
-	b, err := gwmw.Safely(func() []byte {
-		if t, ok := m.(gwmw.ContextTeller); ok {
-			b, _ := t.JSONHitsContext(ctx, body)
-			return b
-		}
-		b, _ := m.JSON(body)
-		return b
-	})
-	if err != nil {
-		return nil
-	}
-	return b
+	return privacyengine.DiagnosticCopy(ctx, st, body)
 }
 
 // laterMasked is the body of a request that went as written, masked the
@@ -651,7 +569,7 @@ func maskedFor(ctx context.Context, p provider.Provider, model string, isGroup b
 		ids = append(ids, m.Provider.ID)
 	}
 	slices.Sort(ids)
-	return masking.WithRoute(ctx, strings.Join(slices.Compact(ids), "\x00"))
+	return privacyengine.WithRoute(ctx, strings.Join(slices.Compact(ids), "\x00"))
 }
 
 // agentTurnKey marks a request an agent sent (serveAgent, count_tokens,

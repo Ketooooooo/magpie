@@ -112,7 +112,7 @@ func TestKeyRedactEveryRoute(t *testing.T) {
 		masked bool
 	}{{"", true}, {"on", true}, {"off", false}} {
 		ctx := access.WithIdentity(context.Background(), access.Identity{KeyID: "k", Redact: c.mode})
-		q, err := maskedQuery(ctx, "news about acmecorp", nil)
+		q, _, err := maskedQuery(ctx, "news about acmecorp", nil)
 		if err != nil || strings.Contains(q, "acmecorp") != !c.masked {
 			t.Errorf("search, key %q: %q %v", c.mode, q, err)
 		}
@@ -121,7 +121,7 @@ func TestKeyRedactEveryRoute(t *testing.T) {
 		}
 	}
 	// no key: the settings
-	q, _ := maskedQuery(context.Background(), "news about acmecorp", nil)
+	q, _, _ := maskedQuery(context.Background(), "news about acmecorp", nil)
 	if strings.Contains(q, "acmecorp") {
 		t.Errorf("a request with no key went unmasked: %q", q)
 	}

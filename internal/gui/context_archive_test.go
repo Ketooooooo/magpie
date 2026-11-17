@@ -3,6 +3,7 @@ package gui
 import (
 	"context"
 	"encoding/json"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,8 +13,6 @@ import (
 	"time"
 
 	"github.com/yetone/magpie/internal/gateway"
-	"github.com/yetone/magpie/internal/gwmw"
-	"github.com/yetone/magpie/internal/masking"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -26,7 +25,7 @@ import (
 func TestContextTextFromTheArchive(t *testing.T) {
 	h := archiveHome(t, fakeArchive{objs: map[string][]byte{}})
 	archiveBucket = func() (archiveStore, bool) { return nil, false }
-	unmask := gwmw.Mask(masking.Masker{})
+	unmask := privacyengine.EnableBuiltin()
 	t.Cleanup(unmask)
 	prev := served.Swap(nil)
 	t.Cleanup(func() { served.Store(prev) })
@@ -90,7 +89,7 @@ func TestContextTextFromTheArchive(t *testing.T) {
 	}
 	// with masking wanted and the masker failing, nothing is shown: one
 	// served last serves, whatever another test left registered
-	broken := gwmw.Mask(failingMasker{})
+	broken := privacyengine.RegisterBuiltinForTest(failingMasker{})
 	defer broken()
 	if code, body := get("/api/context/reply?id=41&day=2026-10-02"); code != http.StatusNotFound || !strings.Contains(body, `"archive":"unread"`) || strings.Contains(body, phone) {
 		t.Fatalf("unmasked: %d %s", code, body)

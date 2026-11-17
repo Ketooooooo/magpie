@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/yetone/magpie/internal/appdir"
-	"github.com/yetone/magpie/internal/pii"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/settings"
 )
 
@@ -32,12 +32,12 @@ func TestEmbeddingsWithAStrayByteUnderAstrLinkGuard(t *testing.T) {
 	for _, f := range []string{"model_int8.onnx", "model_int8.onnx_data", "tokenizer.json"} {
 		copyFile(t, filepath.Join(src, f), filepath.Join(dst, f))
 	}
-	g := pii.Of(pii.AstrLinkGuard)
+	g := privacyengine.GuardForTest()
 	if !g.Installed() {
 		t.Fatalf("the model isn't installed from %s: the pinned revision moved, and this test's folder with it", dst)
 	}
 	t.Cleanup(g.Stop)
-	if err := settings.Save(settings.Settings{Redact: true, RedactPersonal: true, RedactModel: true, RedactModelName: pii.AstrLinkGuard}); err != nil {
+	if err := settings.Save(settings.Settings{Redact: true, RedactPersonal: true, RedactModel: true, RedactModelName: g.ID()}); err != nil {
 		t.Fatal(err)
 	}
 	body := `{"model":"lib/embed-1","input":["hello ` + string([]byte{0xff}) + `","world"]}`

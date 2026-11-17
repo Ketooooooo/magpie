@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	redact "github.com/yetone/magpie/internal/privacyengine/policy"
 	"github.com/yetone/magpie/internal/provider"
-	"github.com/yetone/magpie/internal/redact"
 	"github.com/yetone/magpie/internal/sessions"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/usage"

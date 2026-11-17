@@ -29,6 +29,7 @@ import (
 
 	"github.com/klauspost/compress/zstd"
 	"github.com/yetone/magpie/internal/appdir"
+	"github.com/yetone/magpie/internal/gwmw"
 )
 
 const (
@@ -83,7 +84,8 @@ type Record struct {
 	Values     []Value   `json:"values,omitempty"`
 	// Blocked: the request was held back, sent to no one, for a value
 	// of a kind the user set to block
-	Blocked bool `json:"blocked,omitempty"`
+	Blocked bool                `json:"blocked,omitempty"`
+	Actions []gwmw.RecordAction `json:"actions,omitempty"`
 	// Snips: by placeholder, the text around its first place as the
 	// vendor saw it; in memory only
 	Snips map[string]string `json:"snips,omitempty"`

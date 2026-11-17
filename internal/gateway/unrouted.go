@@ -18,7 +18,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/yetone/magpie/internal/masking"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 )
 
@@ -825,7 +825,7 @@ const heldSay = "If it keeps happening, report it with the report magpie saved o
 
 // modelOn and modelBusy are internal/masking's, a test's
 // to stand in for.
-var modelOn, modelBusy = masking.ModelOn, masking.ModelBusy
+var modelOn, modelBusy = privacyengine.BuiltinModelOn, privacyengine.BuiltinModelBusy
 
 func cmpOr(a, b string) string {
 	if a != "" {

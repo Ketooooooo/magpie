@@ -47,7 +47,7 @@ func TestStopLetsARenewalEnd(t *testing.T) {
 	callCtx, giveUp := context.WithCancel(ctx)
 	called := make(chan error, 1)
 	go func() {
-		called <- Call(callCtx, "load", map[string]any{"provider": "renewco", "account": key}, nil)
+		called <- callHost(callCtx, "load", map[string]any{"provider": "renewco", "account": key}, nil)
 	}()
 	for {
 		if b, _ := os.ReadFile(logf); strings.Contains(string(b), "r-slow") {

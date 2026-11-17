@@ -100,7 +100,7 @@ jobs:
         run: |
           go test -race -c -o "$RUNNER_TEMP/gateway.race" -tags "${{ steps.tags.outputs.tags }}" ./internal/gateway/
           build/race-shards.sh internal/gateway "$RUNNER_TEMP/gateway.race" "$(getconf _NPROCESSORS_ONLN)" -test.timeout=20m
-          go test -race -tags "${{ steps.tags.outputs.tags }}" ./internal/redact/
+          go test -race -tags "${{ steps.tags.outputs.tags }}" ./internal/privacyengine/internal/redact/
 
       # Account usage mixes cached results with concurrent fetches.
       - name: Race account usage

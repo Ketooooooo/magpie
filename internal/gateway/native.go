@@ -44,6 +44,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -120,6 +121,7 @@ func (s *Server) native(w http.ResponseWriter, r *http.Request) {
 func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Provider, call *Call, fail func(int, string)) {
 	start, path := call.Time, r.PathValue("path")
 	var body []byte
+	var hits maskHits
 	if r.Method == http.MethodPost {
 		in, admitted := s.requestBody(w, r, provider.Chat)
 		if !admitted {
@@ -144,7 +146,6 @@ func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Pr
 			return
 		}
 		// as nativeAny's: one the user set to go unmasked goes as written
-		var hits maskHits
 		if !p.SkipsRedaction() {
 			var done func()
 			var err error
@@ -157,11 +158,6 @@ func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Pr
 		}
 		body, _ = json.Marshal(obj)
 		noteMasked(r, "native", hits, sentOf(hits, body), 0, p.ID, model)
-	} else {
-		// Polls can put back only the built-in engine's shared values.
-		var done func()
-		w, done = restoring(w)
-		defer done()
 	}
 	ctx := s.metered(p.Via(r.Context()), p, "")
 	at := cmp.Or(strings.TrimRight(p.Base(provider.Responses), "/"), strings.TrimRight(p.Base(provider.Chat), "/")) + "/" + path
@@ -204,6 +200,17 @@ func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Pr
 			w.Header().Set(k, v)
 		}
 	}
+	taskScope := "ark:" + p.ID
+	if r.Method == http.MethodPost && path == "contents/generations/tasks" && res.StatusCode < 300 && len(hits.hits) > 0 {
+		var taskID string
+		res.Body, taskID = peekArkTaskID(res.Body)
+		s.privacyTasks.Remember(privacyTaskKey(r, taskScope, taskID), hits.engine, hits.hits)
+	}
+	if taskID, ok := strings.CutPrefix(path, "contents/generations/tasks/"); ok && r.Method == http.MethodGet {
+		var finish func()
+		w, finish = s.privacyTasks.WrapReply(w, privacyTaskKey(r, taskScope, taskID))
+		defer finish()
+	}
 	w.WriteHeader(res.StatusCode)
 	// a stream goes on as it comes
 	rc := http.NewResponseController(w)
@@ -220,6 +227,24 @@ func (s *Server) nativeArk(w http.ResponseWriter, r *http.Request, p provider.Pr
 			return
 		}
 	}
+}
+
+type nativeTaskBody struct {
+	io.Reader
+	io.Closer
+}
+
+func peekArkTaskID(body io.ReadCloser) (io.ReadCloser, string) {
+	const maxTaskReply = 64 << 10
+	prefix, err := io.ReadAll(io.LimitReader(body, maxTaskReply))
+	taskID := ""
+	var reply struct {
+		ID string `json:"id"`
+	}
+	if err == nil && json.Unmarshal(prefix, &reply) == nil && idPart.MatchString(reply.ID) {
+		taskID = reply.ID
+	}
+	return nativeTaskBody{Reader: io.MultiReader(bytes.NewReader(prefix), body), Closer: body}, taskID
 }
 
 // nativeKeyed: p is reached with an API key of the user's, a vendor's or

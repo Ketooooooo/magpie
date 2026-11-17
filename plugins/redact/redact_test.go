@@ -1,11 +1,11 @@
 package redact
 
 import (
+	"github.com/yetone/magpie/internal/privacyengine"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/yetone/magpie/internal/gwmw"
 	"github.com/yetone/magpie/internal/pluginrt"
 	"github.com/yetone/magpie/internal/settings"
 	"github.com/yetone/magpie/internal/testenv"
@@ -40,8 +40,8 @@ func TestOnServesOffDoesNot(t *testing.T) {
 	defer rt.Stop()
 	served := func(want bool) {
 		t.Helper()
-		if _, ok := gwmw.Served(); ok != want {
-			t.Fatalf("masker served: %v, want %v (%+v)", ok, want, rt.Statuses())
+		if session, _ := privacyengine.Begin(t.Context(), settings.Load(), true); (session != nil) != want {
+			t.Fatalf("masker served: %v, want %v (%+v)", session != nil, want, rt.Statuses())
 		}
 	}
 	served(false)
