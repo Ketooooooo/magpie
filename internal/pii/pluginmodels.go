@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/yetone/magpie/internal/plugin"
 )
@@ -71,6 +72,14 @@ func modelsFromPlugin(entry plugin.Entry, previous map[string]*externalModel) []
 	if launcher == nil {
 		return nil
 	}
+	if n := launcher.BatchBytes; n != 0 && (n < 1<<10 || n > chunkSize) {
+		log.Printf("privacy models from %s: batchBytes must be between 1 KiB and %d KiB", entry.Spec, chunkSize>>10)
+		return nil
+	}
+	if n := launcher.RequestTimeoutSeconds; n < 0 || n > int(maxHelperRequestTimeout/time.Second) {
+		log.Printf("privacy models from %s: requestTimeoutSeconds must be between 0 and %d", entry.Spec, maxHelperRequestTimeout/time.Second)
+		return nil
+	}
 	versions, err := parsePrivacyVersions(entry.Options)
 	if err != nil {
 		log.Printf("privacy models from %s: %v", entry.Spec, err)
@@ -94,7 +103,8 @@ func modelsFromPlugin(entry plugin.Entry, previous map[string]*externalModel) []
 		id := fmt.Sprintf("%s%x/%s", pluginModelPrefix, owner[:8], v.ID)
 		launch := externalLaunch{
 			Command: command, Args: launcher.Args, Dir: dir, Weights: v.Path,
-			WeightsStamp: weightsStamp(v.Path), WeightsRevision: v.Revision, PackageRevision: packageRevision,
+			WeightsStamp: weightsStamp(v.Path), WeightsRevision: v.Revision, PackageRevision: packageRevision, BatchBytes: launcher.BatchBytes,
+			RequestTimeout: time.Duration(launcher.RequestTimeoutSeconds) * time.Second,
 		}
 		identity := launch.generation(id)
 		m := previous[id]

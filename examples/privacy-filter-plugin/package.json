@@ -1,0 +1,14 @@
+{
+  "name": "magpie-privacy-filter-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "magpie": {
+    "name": "OpenAI Privacy Filter (plugin)",
+    "privacyModels": {
+      "command": "magpie-pf",
+      "args": ["serve"],
+      "batchBytes": 12288,
+      "requestTimeoutSeconds": 300
+    }
+  }
+}

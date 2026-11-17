@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -24,20 +25,27 @@ import (
 	"github.com/yetone/magpie/internal/redact"
 )
 
-// hello is the line pf-serve writes once the model is loaded.
+// hello is the line a helper writes once the model is loaded.
 type hello struct {
+	Protocol int    `json:"protocol,omitempty"`
 	Device   string `json:"device"`
+	Via      string `json:"via,omitempty"`
 	GPU      bool   `json:"gpu"`
 	MS       int    `json:"ms"`
 	GPUError string `json:"gpuError"`
+	GPUAgain int64  `json:"gpuAgain,omitempty"`
+	GPUReset bool   `json:"gpuReset,omitempty"`
 	Error    string `json:"error"`
 }
 
-// helper is one pf-serve running.
+// helper is one model subprocess.
 type helper struct {
-	cmd *exec.Cmd
-	in  io.WriteCloser
-	out *bufio.Reader
+	requestTimeout time.Duration // a plugin may budget time for native worker recovery
+
+	cmd  *exec.Cmd
+	tree *proc.Tree
+	in   io.WriteCloser
+	out  *bufio.Reader
 	// outf is out's end of the stdout pipe. It is magpie's, not
 	// cmd's: cmd.Wait closes a StdoutPipe as the process exits, so a
 	// read after a death got "read |0: file already closed" in place of
@@ -48,7 +56,8 @@ type helper struct {
 	hello  hello
 	exited chan struct{}
 	// slow says magpie ended it, given too long to answer
-	slow atomic.Pointer[string]
+	slow    atomic.Pointer[string]
+	replies *replyPipe
 }
 
 // srv adds Privacy Filter's GPU fallback policy to the shared runner.
@@ -68,8 +77,6 @@ var turn = make(chan struct{}, 1)
 
 // waiting counts the requests waiting for their turn.
 var waiting atomic.Int32
-
-func (h *helper) device() hello { return h.hello }
 
 // loadTimeout is how long pf-serve has to load the model on the CPU:
 // 1.6 GB read from a slow disk, and the warm-up's texts read on a slow
@@ -121,9 +128,9 @@ func lostGPULocked(why string) {
 	srv.gpuAgain = time.Now().Add(gpuRetryAfter(srv.gpuFails))
 }
 
-// classifyTimeout is how long one request may take before pf-serve is
-// taken for hung and ended: a second for each 4 KB on the slowest CPU,
-// and 30 more.
+const maxHelperRequestTimeout = 5 * time.Minute
+
+// classifyTimeout is the default watchdog for a request.
 var classifyTimeout = func(bytes int) time.Duration {
 	return 30*time.Second + time.Duration(bytes/4096)*time.Second
 }
@@ -261,7 +268,6 @@ func startOne(path string, cpu bool, stop <-chan struct{}) (*helper, error) {
 }
 
 func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-chan struct{}) (*helper, error) {
-	path := cmd.Path
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -274,17 +280,27 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 	cmd.Stdout = w
 	h := &helper{cmd: cmd, in: in, out: bufio.NewReaderSize(out, 64<<10), outf: out, stderr: &tail{}, exited: make(chan struct{})}
 	cmd.Stderr = h.stderr
-	err = cmd.Start()
-	// pf-serve has its own copy: once it exits, a read here sees EOF
+	cmd.Env = append(cmd.Environ(), "MAGPIE_PII_PROTOCOL="+strconv.Itoa(helperProtocol))
+	h.tree, err = proc.StartTree(cmd)
+	// The child has its own copy: once it exits, a read here sees EOF.
 	w.Close()
 	if err != nil {
+		in.Close()
 		out.Close()
 		return nil, err
 	}
 	go func() {
-		cmd.Wait()
+		h.tree.Wait()
 		close(h.exited)
 	}()
+	if err := h.readHello(wait, deviceSuffix, stop); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+func (h *helper) readHello(wait time.Duration, deviceSuffix string, stop <-chan struct{}) error {
+	path := h.cmd.Path
 	line := make(chan string, 1)
 	go func() {
 		s, _ := h.out.ReadString('\n')
@@ -295,20 +311,28 @@ func startHelper(cmd *exec.Cmd, wait time.Duration, deviceSuffix string, stop <-
 	case s = <-line:
 	case <-giveUp(wait):
 		h.kill()
-		return nil, fmt.Errorf("%s: the model didn't load in %s%s", baseName(path), wait, deviceSuffix)
+		return fmt.Errorf("%s: the model didn't load in %s%s", baseName(path), wait, deviceSuffix)
 	case <-stop:
 		h.kill()
-		return nil, errStopped
+		return errStopped
 	}
-	if err := json.Unmarshal([]byte(s), &h.hello); err != nil || h.hello.Error != "" || h.hello.Device == "" {
+	if err := json.Unmarshal([]byte(s), &h.hello); err != nil || h.hello.Error != "" || h.hello.Device == "" && h.hello.Via == "" {
 		h.kill()
 		why := h.hello.Error
 		if why == "" {
 			why = h.died()
 		}
-		return nil, fmt.Errorf("%s: %s", baseName(path), why)
+		return fmt.Errorf("%s: %s", baseName(path), why)
 	}
-	return h, nil
+	switch h.hello.Protocol {
+	case 0: // Existing helpers have no protocol field.
+	case helperProtocol:
+		h.startReplyPipe()
+	default:
+		h.kill()
+		return fmt.Errorf("%s: unsupported model helper protocol %d", baseName(path), h.hello.Protocol)
+	}
+	return nil
 }
 
 func baseName(path string) string {
@@ -381,7 +405,7 @@ func lastSaid(stderr string, n int) string {
 func (h *helper) kill() {
 	h.in.Close()
 	if h.cmd.Process != nil {
-		h.cmd.Process.Kill()
+		h.tree.Kill()
 	}
 	<-h.exited
 	h.outf.Close()
@@ -496,6 +520,14 @@ func classifyPF(run <-chan struct{}, texts []string) ([][]redact.Found, error) {
 // reply is a status, then each text's spans (pf-serve.cpp says how).
 func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 	var b bytes.Buffer
+	var pending *pipeCall
+	if p := h.replies; p != nil {
+		id := p.next.Add(1)
+		pending = &pipeCall{texts: texts, reply: make(chan pipeReply, 1)}
+		p.calls.Store(id, pending)
+		defer p.calls.Delete(id)
+		binary.Write(&b, binary.LittleEndian, id)
+	}
 	size := 0
 	put := func(v uint32) { binary.Write(&b, binary.LittleEndian, v) }
 	put(uint32(len(texts)))
@@ -504,22 +536,43 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 		b.WriteString(t)
 		size += len(t)
 	}
-	done, timeout := make(chan struct{}), classifyTimeout(size)
+	done, timeout := make(chan struct{}), max(classifyTimeout(size), h.requestTimeout)
 	defer close(done)
 	go func() {
 		select {
 		case <-done:
 		case <-time.After(timeout):
 			// a hung pf-serve: killed, its pipe ends the read below
-			s := fmt.Sprintf("didn't answer in %s (%d KB%s), so magpie ended it", timeout, (size+1023)/1024, onWhat(!h.hello.GPU))
+			s := fmt.Sprintf("didn't answer in %s (%d KB%s), so magpie ended it", timeout, (size+1023)/1024, onWhat(!h.device().GPU))
 			h.slow.Store(&s)
-			h.cmd.Process.Kill()
+			h.tree.Kill()
 		}
 	}()
 	if _, err := h.in.Write(b.Bytes()); err != nil {
 		return nil, fmt.Errorf("%s %s (%v)", baseName(h.cmd.Path), h.died(), err)
 	}
+	if pending != nil {
+		select {
+		case reply := <-pending.reply:
+			return reply.found, reply.err
+		case <-h.replies.done:
+			select {
+			case reply := <-pending.reply:
+				return reply.found, reply.err
+			default:
+				return nil, h.replies.err
+			}
+		}
+	}
 	beforeRead(h)
+	return h.readFindings(texts)
+}
+
+type requestError string
+
+func (e requestError) Error() string { return string(e) }
+
+func (h *helper) readFindings(texts []string) ([][]redact.Found, error) {
 	r := &reader{r: h.out}
 	status := r.u32()
 	if status == 1 {
@@ -527,7 +580,7 @@ func (h *helper) classify(texts []string) ([][]redact.Found, error) {
 		if r.err != nil {
 			return nil, r.fail(h)
 		}
-		return nil, errors.New(string(msg))
+		return nil, requestError(msg)
 	}
 	out := make([][]redact.Found, len(texts))
 	for i, t := range texts {
@@ -592,7 +645,7 @@ func (r *reader) bytes(n int) []byte {
 
 func (r *reader) fail(h *helper) error {
 	if errors.Is(r.err, io.EOF) || errors.Is(r.err, io.ErrUnexpectedEOF) {
-		return fmt.Errorf("pf-serve %s", h.died())
+		return fmt.Errorf("%s %s", baseName(h.cmd.Path), h.died())
 	}
 	return r.err
 }

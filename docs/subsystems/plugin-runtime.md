@@ -266,6 +266,18 @@ community plugins (OpenCode plugins, npm packages in the plugin host). A
 gateway point stays behind the built-in plugin that serves it, so off
 still means off; a page is its own plugin's to turn on and off.
 
+A local privacy model plugin declares a launcher in `magpie.privacyModels`
+in its `package.json`. The saved `models` options supply the version ID,
+display name, local weight path, optional revision and minimum score.
+Magpie appends the selected weight path to the launcher arguments and
+supervises the detector's stdio. The launcher can set `batchBytes` from
+1 to 12 KiB, with 4 KiB as the default. A launcher that supervises
+another process can set `requestTimeoutSeconds` up to 300 so it has time
+to recover and reply. This is the process watchdog. The gateway's
+masking wait keeps its own deadline. The plugin owns its model assets
+and any device-specific policies. See [launcher discovery](../../internal/pii/pluginmodels.go)
+and the [Privacy Filter plugin](../../examples/privacy-filter-plugin).
+
 | Point | What a community plugin gives | Served by | Reference |
 | --- | --- | --- | --- |
 | Router strategy | A module's `export const strategies = {name: (pool, seats, options) => order}` (or `{order}` objects) are routings `<short name>/<name>`, registered with `routes.Register` while the gateway serves `middleware.Points()` and the plugin is on and loaded; off or reloaded, they are removed. 20ms each, fail open: an error, a timeout or what isn't an order of the seats is the listed order, counted on the Plugins page. The routing pickers offer the served ones (`jsRoutings` in the settings state); a routing saved whose plugin is gone shows as it is and is the listed order. providers.json keeps such a routing as saved (`provider.PluginRouting`), so a plugin turned off and on again routes its groups again. | `plugins/middleware` ("JS gateway plugins", from the same module as its [middleware](gateway-middleware.md)) | [`points.go`](../../internal/middleware/points.go), [`app.js`](../../internal/gui/assets/app.js), [`client.js`](../../internal/gui/assets/plugins/routing/client.js), [`groups_cli.go`](../../internal/cli/groups_cli.go), [`routing.go`](../../internal/provider/routing.go) |

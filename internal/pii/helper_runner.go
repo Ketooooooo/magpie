@@ -196,7 +196,9 @@ func (r *helperRunner) fillStatusLocked(s *Status) {
 		case <-h.exited:
 		default:
 			info := h.device()
+			s.GPUAgain, s.GPUReset = info.GPUAgain, info.GPUReset
 			s.Running, s.Device, s.GPU, s.LoadMS, s.GPUError = true, info.Device, info.GPU, info.MS, info.GPUError
+			s.Via = info.Via
 		}
 	}
 	s.Failed, s.Loading = r.failed, r.loading

@@ -12,9 +12,11 @@ import (
 // Its model's local path is appended to Args. Only a plugin's package may
 // declare the launcher; saved Options supply model versions and paths.
 type PrivacyLauncher struct {
-	Command string   `json:"command"`
-	Args    []string `json:"args"`
-	Version string   `json:"-"`
+	Command               string   `json:"command"`
+	Args                  []string `json:"args"`
+	BatchBytes            int      `json:"batchBytes,omitempty"`
+	RequestTimeoutSeconds int      `json:"requestTimeoutSeconds,omitempty"`
+	Version               string   `json:"-"`
 }
 
 // PrivacyModels reads a plugin's launcher and whether it has no host entry.

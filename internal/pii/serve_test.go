@@ -20,6 +20,38 @@ func person(s, e int) redact.Found {
 	return redact.Found{Start: s, End: e, Label: "private_person", Score: float64(float32(0.98))}
 }
 
+func TestPrivacyFilterNegotiatesHelperProtocol(t *testing.T) {
+	for _, mode := range []string{"ok", "protocol2"} {
+		t.Run(mode, func(t *testing.T) {
+			log := fakeInstall(t, mode, false)
+			h, err := startOne(exe("pf-serve"), true, make(chan struct{}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer end(h)
+			var wantIDs []string
+			if mode == "protocol2" {
+				wantIDs = []string{"request-id 1", "request-id 2"}
+			}
+			if (h.replies != nil) != (wantIDs != nil) {
+				t.Fatalf("unexpected protocol %d", h.hello.Protocol)
+			}
+			for range 2 {
+				got, err := h.classify([]string{"Hi Alice"})
+				if err != nil || !reflect.DeepEqual(got, [][]redact.Found{{person(3, 8)}}) {
+					t.Fatalf("classify = %v, %v", got, err)
+				}
+			}
+			if ids := fakeLines(t, log, "request-id"); !reflect.DeepEqual(ids, wantIDs) {
+				t.Fatalf("request IDs = %v, want %v", ids, wantIDs)
+			}
+			if device := h.device(); device.Device != "CPU" || device.MS != 7 {
+				t.Fatalf("device after replies without updates = %+v", device)
+			}
+		})
+	}
+}
+
 // Short texts go to pf-serve joined, in one request, and what it finds
 // comes back to each text at that text's own offsets; a text seen before
 // isn't asked about again.
@@ -635,5 +667,28 @@ func TestGPURetryAfter(t *testing.T) {
 		if got := gpuRetryAfter(n); got != want {
 			t.Errorf("gpuRetryAfter(%d) = %s, want %s", n, got, want)
 		}
+	}
+}
+
+func TestPluginWatchdogAllowsWorkerRecovery(t *testing.T) {
+	log := fakeInstall(t, "slow", false)
+	old := classifyTimeout
+	classifyTimeout = func(int) time.Duration { return 0 }
+	t.Cleanup(func() { classifyTimeout = old })
+	launch := externalLaunch{
+		Command: exe("pf-serve"), Dir: dir(), Weights: modelName(),
+		RequestTimeout: 5 * time.Second,
+	}
+	h, err := launch.start(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end(h)
+	got, err := h.classify([]string{"Hi Alice"})
+	if err != nil || !reflect.DeepEqual(got, [][]redact.Found{{person(3, 8)}}) {
+		t.Fatalf("worker did not reply within its configured recovery budget: %v, %v", got, err)
+	}
+	if len(fakeLines(t, log, "start")) != 1 {
+		t.Fatal("plugin worker was restarted")
 	}
 }
