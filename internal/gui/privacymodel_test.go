@@ -99,16 +99,18 @@ type fakeModel struct {
 	did       *[]string
 }
 
-func (f *fakeModel) ID() string        { return f.id }
-func (f *fakeModel) Supported() bool   { return true }
-func (f *fakeModel) Installed() bool   { return f.installed }
-func (f *fakeModel) MinScore() float64 { return 0.5 }
-func (f *fakeModel) Size() int64       { return 1 }
+func (f *fakeModel) ID() string           { return f.id }
+func (f *fakeModel) Supported() bool      { return true }
+func (f *fakeModel) Installed() bool      { return f.installed }
+func (f *fakeModel) ManagesWeights() bool { return true }
+func (f *fakeModel) Generation() string   { return "" }
+func (f *fakeModel) MinScore() float64    { return 0.5 }
+func (f *fakeModel) Size() int64          { return 1 }
 func (f *fakeModel) Find(context.Context, []string) ([][]redact.Found, error) {
 	return nil, nil
 }
 func (f *fakeModel) Now() pii.Status {
-	return pii.Status{Model: f.id, Supported: true, Installed: f.installed, Size: 1}
+	return pii.Status{Model: f.id, ManagedWeights: true, Supported: true, Installed: f.installed, Size: 1}
 }
 func (f *fakeModel) Download(done func()) error {
 	*f.did = append(*f.did, "download "+f.id)

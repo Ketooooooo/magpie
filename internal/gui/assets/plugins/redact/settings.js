@@ -296,3 +296,59 @@ featWho.redact = (line, f) => {
   const say = () => { const s = prefs; if (s && !(s.redact || s.redactPersonal || s.redactWords?.length)) line.prepend(el("span", "warn", t("Nothing is masked yet")), line.childNodes.length ? " · " : ""); };
   if (prefs) say(); else loadSettings().then(say, () => {});
 };
+
+// A poll can finish after a pick, and a Settings redraw can replace the
+// row while the pick is being saved. Draw on the current row.
+const pmState = {
+  model: null,
+  draw: null,
+  change: 0,
+  timer: 0,
+  saving: null,
+  poll(wanted) {
+    clearTimeout(this.timer);
+    if (wanted && !this.saving) this.timer = setTimeout(() => this.load(), 1000);
+  },
+  show(model) {
+    this.model = model;
+    this.draw?.(model);
+  },
+  async load() {
+    if (this.saving) return;
+    const change = ++this.change;
+    try {
+      const model = await api("privacy-model");
+      if (change === this.change) this.show(model);
+    } catch {}
+  },
+  async act(doing, model, score) {
+    this.poll(false);
+    const change = ++this.change;
+    const post = () => api("privacy-model", { do: doing, model, score });
+    this.saving = this.saving ? this.saving.then(post, post) : post();
+    try {
+      const saved = await this.saving;
+      if (change === this.change) {
+        this.saving = null;
+        this.show(saved);
+      }
+    } catch (err) {
+      if (change === this.change) {
+        this.saving = null;
+        statusTErr(err);
+        this.load();
+      }
+    }
+  },
+};
+
+function pmModelOption(model) {
+  const [name, description] = PM_MODELS[model.model] || [model.model];
+  let note = "";
+  if (!model.supported && !model.installed) {
+    note = t("Not available on this system yet");
+  } else if (model.managedWeights !== false) {
+    note = t(description || "") + " · " + fmtBytes(model.size) + (model.installed ? " · " + t("downloaded") : "");
+  }
+  return { v: model.model, name: model.name || name, literalName: true, note };
+}

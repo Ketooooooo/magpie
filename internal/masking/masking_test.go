@@ -94,9 +94,11 @@ type fake struct {
 	installed, fails bool
 }
 
-func (fake) ID() string        { return pii.AstrLinkGuard }
-func (fake) MinScore() float64 { return 0.8 }
-func (f fake) Installed() bool { return f.installed }
+func (fake) ID() string           { return pii.AstrLinkGuard }
+func (fake) MinScore() float64    { return 0.8 }
+func (f fake) Installed() bool    { return f.installed }
+func (fake) ManagesWeights() bool { return true }
+func (fake) Generation() string   { return "" }
 func (f fake) Find(_ context.Context, texts []string) ([][]redact.Found, error) {
 	if f.fails {
 		return nil, errors.New("pf-serve exited")
