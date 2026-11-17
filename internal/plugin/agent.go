@@ -51,8 +51,9 @@ func InMagpieOnly(target string) bool {
 	mw, mwOnly := Middleware(target)
 	ag, agOnly := Agent(target)
 	pg, pgOnly := Window(target)
-	if mw == "" && ag == "" && pg == nil {
+	privacy, privacyOnly := Privacy(target)
+	if mw == "" && ag == "" && pg == nil && privacy == nil {
 		return false
 	}
-	return (mw == "" || mwOnly) && (ag == "" || agOnly) && (pg == nil || pgOnly)
+	return (mw == "" || mwOnly) && (ag == "" || agOnly) && (pg == nil || pgOnly) && (privacy == nil || privacyOnly)
 }

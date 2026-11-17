@@ -22,6 +22,11 @@ import (
 // search and vision stand-ins) go without them, as their replies are
 // magpie's to read.
 func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provider.Protocol, body []byte) {
+	r, err := pinPrivacySettings(r)
+	if err != nil {
+		writeError(w, from, http.StatusServiceUnavailable, gwmw.ErrUnmasked.Error())
+		return
+	}
 	withGatewaySession(w, r)
 	// the agent's own turn, which the user's model for requests masking
 	// would change is for (maskRouteFor)
@@ -36,7 +41,7 @@ func (s *Server) serveAgent(w http.ResponseWriter, r *http.Request, from provide
 		writePrevNotFound(w, id)
 		return
 	}
-	w, recorded := recordConversation(w, r, from, body)
+	w, r, recorded := recordConversation(w, r, from, body)
 	defer recorded()
 	// a conversation going round one tool call is answered here, before
 	// anything of it is asked of a hook, a middleware or a provider

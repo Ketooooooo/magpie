@@ -143,6 +143,7 @@ func TestSettingsSaveKeepsWhatItDoesNotSend(t *testing.T) {
 		ModelHeaders:         map[string]map[string]string{"p/m": {"X-Endpoint": "ep-1"}},
 		ModelSystemPrompts:   map[string]string{"p/m": "Answer in Chinese."},
 		ModelTiers:           map[string]string{"p/m": "ultrafast"},
+		PrivacyEngine:        "example-engine",
 		RedactRules:          []redact.Rule{{Kind: "prefix", Prefix: "oc_sk_"}},
 		RedactActions:        map[string]string{"API_KEY": "block", "EMAIL": "warn"},
 		RedactAllow:          []string{"team@kelvarn.io"},

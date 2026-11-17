@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/yetone/magpie/internal/masking"
+	"github.com/yetone/magpie/internal/privacyengine"
 	"github.com/yetone/magpie/internal/provider"
 	"github.com/yetone/magpie/internal/settings"
 )
@@ -123,7 +123,7 @@ func relayRefuses(r *http.Request, body []byte) string {
 	if r.Header.Get(AccountHeader) != "" {
 		return AccountHeader + " names one of magpie's Codex accounts, and magpie isn't running. Open magpie to go on with this thread."
 	}
-	if masking.Wanted(settings.Load()) {
+	if privacyengine.Wanted(settings.Load()) {
 		return "magpie isn't running, and Settings › Privacy masks what is sent: this turn is not sent unmasked. Open magpie to go on with this thread."
 	}
 	return ""

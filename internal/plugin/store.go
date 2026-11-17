@@ -521,6 +521,9 @@ func notPlugin(target string) error {
 	if w, _ := Window(target); w != nil {
 		return nil
 	}
+	if p, _ := Privacy(target); p != nil {
+		return nil
+	}
 	var pkg struct {
 		Name    string          `json:"name"`
 		Main    string          `json:"main"`
