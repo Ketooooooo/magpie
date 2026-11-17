@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unicode/utf8"
 
 	"github.com/yetone/magpie/internal/appdir"
@@ -28,14 +29,20 @@ type externalLaunch struct {
 	WeightsStamp    string
 	WeightsRevision string
 	PackageRevision string
+	BatchBytes      int           `json:",omitempty"`
+	RequestTimeout  time.Duration `json:",omitempty"`
 }
 
 func newExternalModel(id, identity string, launch externalLaunch) *externalModel {
 	m := &externalModel{id: id, identity: identity, launch: launch}
 	path := filepath.Join(appdir.Cache(), "external-privacy", "found-"+identity+".bin")
+	chunk := guardChunk
+	if launch.BatchBytes != 0 {
+		chunk = launch.BatchBytes
+	}
 	m.backend = &backend{
 		turn: make(chan struct{}, 1), waiting: new(atomic.Int32),
-		cache: newLRU(20000), disk: new(diskState), chunk: guardChunk,
+		cache: newLRU(20000), disk: new(diskState), chunk: chunk,
 		path:     func() string { return path },
 		heldBack: func() error { return nil },
 	}
@@ -148,7 +155,11 @@ func (l externalLaunch) start(stop <-chan struct{}) (*helper, error) {
 	args := append(slices.Clone(l.Args), l.Weights)
 	cmd := proc.Command(exe, args...)
 	cmd.Dir = l.Dir
-	return startHelper(cmd, loadTimeout, "", stop)
+	h, err := startHelper(cmd, loadTimeout, "", stop)
+	if err == nil {
+		h.requestTimeout = l.RequestTimeout
+	}
+	return h, err
 }
 
 func (m *externalModel) classifier(run <-chan struct{}) func([]string) ([][]redact.Found, error) {
