@@ -21963,7 +21963,6 @@ function renderRedact(s, keep) {
 
 // privacyModelRow: the local masking model (internal/pii); its state read
 // on drawing, each second while it downloads or starts; then pmScore.
-let pmState = null, pmTimer = 0;
 function privacyModelRow(box, why) {
   const r = el("div", "row pref" + (why ? " pm-wait" : ""));
   r.id = "privacyModelRow";
@@ -21972,7 +21971,8 @@ function privacyModelRow(box, why) {
   sr.id = "pmScoreRow";
   const name = () => { const n = el("div", "name", t("Find with a local model")); n.append(el("span", "badge new", t("New"))); return n; };
   if (why) {
-    clearTimeout(pmTimer);
+    pmState.draw = null;
+    pmState.poll(false);
     const who = el("div", "who");
     who.append(name(), el("div", "sub say", why));
     r.append(who);
@@ -21983,13 +21983,13 @@ function privacyModelRow(box, why) {
     if (!r.isConnected) return;
     const who = el("div", "who"), val = el("div", "val");
     who.append(name(), el("div", m && (m.on || m.installed || !m.supported || pmBusy(m) || m.error || m.models?.some((x) => x.error)) ? "sub say" : "sub", pmSub(m)));
-    if (m?.supported || m?.installed) {
+    if (m?.supported || m?.installed || m?.managedWeights === false) {
       if (m.models?.length > 1) val.append(pmPick(m, (id) => act("pick", id)));
       if (pmBusy(m)) {
         const c = el("button", "text", t("Cancel"));
         c.onclick = () => act("cancel");
         val.append(c);
-      } else if (m.installed && !m.on) {
+      } else if (m.installed && !m.on && m.managedWeights !== false) {
         const x = el("button", "text", t("Delete model"));
         x.onclick = async () => {
           if (await confirmAction(t("Delete the model?"), t("Turning it on again downloads {size} again.", { size: fmtBytes(m.size) }), t("Delete"))) act("remove");
@@ -22007,15 +22007,17 @@ function privacyModelRow(box, why) {
       sr.replaceChildren(sw, sv);
       if (!sr.isConnected) r.after(sr);
     } else sr.remove();
-    clearTimeout(pmTimer);
     // a download's progress, and where pf-serve runs once it has started
     const starting = m?.on && m.installed && !m.running && !m.failed && tries++ < 30;
-    if (pmBusy(m) || starting) pmTimer = setTimeout(load, 1000);
+    pmState.poll(pmBusy(m) || starting);
   };
-  const load = () => api("privacy-model").then((m) => { pmState = m; draw(m); }).catch(() => {});
-  const act = (doing, model, score) => { tries = 0; api("privacy-model", { do: doing, model, score }).then((m) => { pmState = m; draw(m); }).catch((e) => { statusTErr(e); load(); }); };
-  draw(pmState);
-  load();
+  const act = (...args) => {
+    tries = 0;
+    pmState.act(...args);
+  };
+  pmState.draw = draw;
+  draw(pmState.model);
+  pmState.load();
 }
 // the local models to pick from (pii.Models), by the app's menu: what
 // each is, its size and whether it is downloaded
@@ -22027,12 +22029,11 @@ function pmPick(m, pick) {
   b.type = "button";
   b.setAttribute("aria-haspopup", "menu");
   b.title = t("The local model");
-  b.append(el("span", "", (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
+  b.append(el("span", "", m.name || (PM_MODELS[m.model] || [m.model])[0]), svg(CHEV, 11, 1.6));
   b.onclick = (e) => {
     e.stopPropagation();
     if (b.classList.contains("open")) return closeProtoMenu();
-    const opts = (m.models || []).map((x) => ({ v: x.model, name: (PM_MODELS[x.model] || [x.model])[0], literalName: true,
-      note: !x.supported && !x.installed ? t("Not available on this system yet") : t(PM_MODELS[x.model]?.[1] || "") + " · " + fmtBytes(x.size) + (x.installed ? " · " + t("downloaded") : "") }));
+    const opts = (m.models || []).map(pmModelOption);
     openProtoMenu(b, opts, m.model, (v) => v !== m.model && pick(v), "The local model", "sess-menu", "right");
   };
   return b;
@@ -22060,6 +22061,10 @@ function pmScore(m, pick) {
 function pmSub(m) {
   const about = t("Names, addresses and passwords no rule can find, found by a model that runs on this computer");
   if (!m) return about;
+  if (m.managedWeights === false) {
+    if (!m.installed) return m.failed || t("Not available on this system yet");
+    if (!m.on) return about;
+  }
   if (!m.supported && !m.installed) return t("Not available on this system yet");
   const d = pmBusy(m);
   if (d) return t("Downloading the model: {done} of {total}", { done: fmtBytes(d.done), total: fmtBytes(d.total) });
